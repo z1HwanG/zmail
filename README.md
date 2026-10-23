@@ -3,7 +3,7 @@
 [![Release](https://img.shields.io/github/v/release/z1HwanG/zmail?display_name=tag&label=release)](https://github.com/z1HwanG/zmail/releases)
 [![CI](https://github.com/z1HwanG/zmail/actions/workflows/ci.yml/badge.svg)](https://github.com/z1HwanG/zmail/actions/workflows/ci.yml)
 [![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
-[![License](https://img.shields.io/badge/license-personal%20use-lightgrey)](https://github.com/z1HwanG/zmail#许可)
+[![License](https://img.shields.io/badge/license-MIT-green)](https://github.com/z1HwanG/zmail/blob/main/LICENSE)
 
 > 单用户、Web 端、多账号聚合邮箱客户端。Go + SQLite(WAL) + IMAP IDLE + SSE，单二进制、单进程、低资源占用。
 
@@ -184,4 +184,4 @@ make.ps1 / make.cmd  Windows 构建入口
 
 ## 许可
 
-个人使用项目，未声明开源许可。
+本项目采用 [MIT License](LICENSE) 开源许可。
