@@ -1,5 +1,5 @@
 # 1Panel「容器 → 编排」可直接粘贴使用（方式 B）。
-# 前置步骤见 docs/1panel.md：
+# 前置步骤见 docs/DEPLOY.md：
 #   1) 本机 make build-linux 得到 dist/zmail-linux-amd64
 #   2) 上传 dist/zmail-linux-amd64 与 deploy/Dockerfile 到服务器同一目录
 #   3) 在服务器执行：docker build -f Dockerfile -t zmail:latest .

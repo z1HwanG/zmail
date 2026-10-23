@@ -17,7 +17,7 @@ zMail 把 Gmail、Outlook、QQ、163 和自建 IMAP 邮箱聚合到一个三栏 
 |---|---|
 | [docs/BUILD.md](docs/BUILD.md) | 架构、数据模型、模块设计、API 与完整构建步骤 |
 | [docs/CONTRACT.md](docs/CONTRACT.md) | 内部包接口与前端 DOM 契约 |
-| [docs/1panel.md](docs/1panel.md) | 1Panel / systemd / Docker 部署与运维 |
+| [docs/DEPLOY.md](docs/DEPLOY.md) | 二进制/systemd、Docker、反向代理与运维 |
 | [docs/reverse-proxy.md](docs/reverse-proxy.md) | Nginx / Caddy / Traefik 反代与 SSE 配置 |
 | [docs/providers.md](docs/providers.md) | Gmail、Outlook、QQ、163、自建邮箱接入 |
 | [CHANGELOG.md](CHANGELOG.md) | 版本变更记录 |
@@ -82,7 +82,7 @@ make.cmd build       # 生成 zmail.exe（CGO_ENABLED=0 静态编译），会自
 make.cmd check       # build + vet
 make.cmd run         # 本地运行
 make.cmd genkey      # 生成 SESSION_KEY / CREDENTIALS_KEY
-make.cmd build-linux # 交叉编译 Linux amd64/arm64（1Panel 部署用）
+make.cmd build-linux # 交叉编译 Linux amd64/arm64（服务器部署用）
 ```
 
 或在 PowerShell 7 里直接运行 ` .\make.ps1 build `（脚本策略受限时用上面的 `make.cmd`）。
@@ -106,7 +106,7 @@ go vet ./...
 
 部署方式：
 
-- **1Panel 服务器（推荐）**：见 [docs/1panel.md](docs/1panel.md)——二进制 + systemd、1Panel 反向代理与 HTTPS、SSE 关缓冲、计划任务备份、Docker 编排方案与排错清单
+- **通用部署（推荐）**：见 [docs/DEPLOY.md](docs/DEPLOY.md)——二进制 + systemd、Docker Compose、反向代理与 HTTPS、SSE 关缓冲、备份升级和排错清单
 - 通用 Linux 部署：见 [docs/BUILD.md](docs/BUILD.md) 第 11 章
 - 反代细节：[docs/reverse-proxy.md](docs/reverse-proxy.md)；服务商参数与授权码申请：[docs/providers.md](docs/providers.md)
 

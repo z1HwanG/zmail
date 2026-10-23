@@ -8,6 +8,10 @@
 
 - 新增 MIT License
 
+### Changed
+
+- 部署文档迁移为 `docs/DEPLOY.md`，补充 Docker Compose 完整部署流程
+
 ## [0.1.1] - 2026-10-24
 
 首个公开版本。
@@ -24,7 +28,7 @@
 - AES-256-GCM 凭据加密、HMAC 会话、CSRF Origin 校验
 - 服务端 HTML 白名单消毒、CSP、SSRF 防护与图片代理
 - 响应式三栏界面、深色模式、快捷键、命令面板与 PWA
-- systemd、Docker Compose、1Panel 部署文档
+- systemd、Docker Compose 与 1Panel 部署文档
 
 ### Changed
 

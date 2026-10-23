@@ -11,7 +11,7 @@ all: build
 build:
 	CGO_ENABLED=0 go build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BINARY) $(PKG)
 
-# 交叉编译 Linux 单文件二进制（上传到 1Panel 服务器用）
+# 交叉编译 Linux 单文件二进制（服务器部署用）
 build-linux:
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o dist/zmail-linux-amd64 $(PKG)
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o dist/zmail-linux-arm64 $(PKG)
