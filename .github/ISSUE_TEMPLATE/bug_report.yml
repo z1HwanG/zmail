@@ -1,0 +1,47 @@
+name: Bug report
+description: 报告可复现的功能或部署问题
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请勿在公开 Issue 中粘贴密码、授权码、Cookie、完整邮箱内容或服务器公网 IP。安全问题请使用 SECURITY.md 中的私下报告渠道。
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      placeholder: 0.1.1
+    validations:
+      required: true
+  - type: dropdown
+    id: deploy
+    attributes:
+      label: 部署方式
+      options:
+        - 二进制 + systemd
+        - Docker / 1Panel 编排
+        - 本地 go run
+        - 其他
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 请提供最小可复现步骤，隐去真实邮箱和主机信息
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际行为与日志
+      description: 请先脱敏日志
+    validations:
+      required: true

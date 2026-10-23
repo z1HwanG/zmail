@@ -1,0 +1,33 @@
+# 1Panel「容器 → 编排」可直接粘贴使用（方式 B）。
+# 前置步骤见 docs/1panel.md：
+#   1) 本机 make build-linux 得到 dist/zmail-linux-amd64
+#   2) 上传 dist/zmail-linux-amd64 与 deploy/Dockerfile 到服务器同一目录
+#   3) 在服务器执行：docker build -f Dockerfile -t zmail:latest .
+#   4) 复制 deploy/zmail.env.example 为本目录的 zmail.env 并填好必填变量
+services:
+  zmail:
+    image: zmail:latest
+    container_name: zmail
+    restart: unless-stopped
+    env_file:
+      - ./zmail.env
+    environment:
+      LISTEN_ADDR: 0.0.0.0:7080
+      DB_PATH: /data/zmail.db
+      RAW_DIR: /data/raw
+    volumes:
+      # 绑定到宿主机目录，方便 1Panel 文件管理/备份直接拷贝
+      - ./data:/data
+    # 只绑定本机，由 1Panel 反向代理对外提供 HTTPS
+    ports:
+      - "127.0.0.1:7080:7080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:7080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -1,0 +1,70 @@
+{{define "head"}}
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#eef1f4">
+<meta name="color-scheme" content="light dark">
+<title>{{.Title}}</title>
+<link rel="icon" href="/static/icons/icon.svg" type="image/svg+xml">
+<link rel="icon" href="/static/icons/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="icon" href="/static/icons/favicon-16.png" sizes="16x16" type="image/png">
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+<link rel="stylesheet" href="/static/app.css?v={{.AssetVersion}}">
+<link rel="manifest" href="/static/manifest.webmanifest?v={{.AssetVersion}}">
+{{end}}
+
+{{define "topbar"}}
+<header class="topbar">
+  <a class="brand" href="/mail" aria-label="zMail 首页">
+    <img class="brand-icon" src="/static/icons/icon.svg" width="26" height="26" alt=""><span class="brand-word">z<em>Mail</em></span>
+  </a>
+  <div class="spacer"></div>
+  <div class="top-actions">
+    <a class="icon-btn" href="/mail" title="返回邮件" aria-label="返回邮件">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 6h16v12H4z"/><path d="m4 7 8 6 8-6"/></svg>
+    </a>
+    <button id="themeBtn" class="icon-btn" type="button" title="切换主题" aria-label="切换主题">◐</button>
+    <button id="helpBtn" class="icon-btn" type="button" title="快捷键" aria-label="快捷键">?</button>
+  </div>
+</header>
+{{end}}
+
+{{define "mailTopbar"}}
+<header class="topbar">
+  <button id="menuBtn" class="icon-btn" type="button" aria-label="菜单">☰</button>
+  <a class="brand" href="/mail" aria-label="zMail 首页">
+    <img class="brand-icon" src="/static/icons/icon.svg" width="26" height="26" alt=""><span class="brand-word">z<em>Mail</em></span>
+  </a>
+  <label class="top-search">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+    <input id="search" type="search" placeholder="搜索发件人、主题或正文…  /" autocomplete="off" aria-label="搜索邮件">
+  </label>
+  <div class="spacer"></div>
+  <div class="top-actions">
+    <span id="syncState" class="sync-state">已连接</span>
+    <a id="refreshBtn" class="icon-btn" href="/mail" title="刷新" aria-label="刷新">↻</a>
+    <button id="composeBtn" class="compose-btn" type="button" title="写信 (c)">写信</button>
+    <a class="icon-btn" href="/settings/accounts" title="账号设置" aria-label="账号设置">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21h-4v-.09A1.7 1.7 0 0 0 9 19.35a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.63 15a1.7 1.7 0 0 0-1.56-1.03H3v-4h.09A1.7 1.7 0 0 0 4.65 9a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.63a1.7 1.7 0 0 0 1.03-1.56V3h4v.09A1.7 1.7 0 0 0 15 4.65a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.37 9a1.7 1.7 0 0 0 1.56 1.03H21v4h-.09A1.7 1.7 0 0 0 19.4 15Z"/></svg>
+    </a>
+    <button id="themeBtn" class="icon-btn" type="button" title="切换主题" aria-label="切换主题">◐</button>
+    <button id="helpBtn" class="icon-btn" type="button" title="快捷键" aria-label="快捷键">?</button>
+  </div>
+</header>
+{{end}}
+
+{{define "zmailData"}}
+<script nonce="{{.Nonce}}">window.__ZMAIL__ = {{.ZMail}};</script>
+{{end}}
+
+{{define "scripts"}}
+<script src="/static/htmx.min.js?v={{.AssetVersion}}" defer></script>
+<script src="/static/app.js?v={{.AssetVersion}}" defer></script>
+{{end}}
+
+{{define "settingsNav"}}
+<nav class="settings-nav">
+  <a href="/mail">← 返回邮件</a>
+  <a href="/settings/accounts">账号设置</a>
+  <a href="/settings/general">通用设置</a>
+</nav>
+{{end}}

@@ -1,0 +1,27 @@
+[Unit]
+Description=zMail 聚合邮箱
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=zmail
+Group=zmail
+WorkingDirectory=/var/lib/zmail
+EnvironmentFile=/etc/zmail/zmail.env
+ExecStart=/opt/zmail/zmail
+Restart=always
+RestartSec=2
+TimeoutStopSec=20
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/zmail
+LimitNOFILE=65536
+# 结构化日志直接交给 journald
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

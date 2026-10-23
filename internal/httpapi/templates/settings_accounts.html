@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+{{template "head" .}}
+</head>
+<body class="page-settings">
+{{template "topbar" .}}
+<main class="settings">
+  <div class="settings-layout">
+    <aside class="settings-rail" aria-label="设置分区">
+      <p class="rail-label">设置</p>
+      <nav class="rail-nav">
+        <a class="rail-item active" href="/settings/accounts" aria-current="page">邮箱账号 <span class="rail-count">{{len .Accounts}}</span></a>
+        <a class="rail-item" href="/settings/general">通用设置</a>
+      </nav>
+      <p class="rail-label">预留分区</p>
+      <div class="rail-future" aria-label="未来功能占位">
+        <span class="rail-item is-disabled">通知与提醒 <em>以后</em></span>
+        <span class="rail-item is-disabled">签名与模板 <em>以后</em></span>
+        <span class="rail-item is-disabled">自动化规则 <em>以后</em></span>
+        <span class="rail-item is-disabled">数据与备份 <em>以后</em></span>
+      </div>
+    </aside>
+
+    <div class="settings-content">
+      <header class="settings-page-head">
+        <div>
+          <p class="settings-kicker">Settings / Accounts</p>
+          <h1>邮箱账号</h1>
+          <p>密码仅用于 IMAP/SMTP 登录，使用 AES-256-GCM 加密后存库，不会以明文写入日志。已添加的账号可以随时修改连接参数或密码。</p>
+        </div>
+      </header>
+
+      <div class="settings-summary" aria-label="账号概览">
+        <div class="summary-item"><span>已添加</span><strong>{{len .Accounts}}</strong><small>个邮箱账号</small></div>
+        <div class="summary-item"><span>凭据保护</span><strong>AES-256</strong><small>GCM 加密存储</small></div>
+        <div class="summary-item"><span>收信方式</span><strong>IMAP</strong><small>IDLE 实时推送</small></div>
+      </div>
+
+      <div id="accountStatus" class="form-status" role="status" aria-live="polite"></div>
+
+      <section class="card account-section">
+        <div class="card-head">
+          <div>
+            <h2>账号列表</h2>
+            <p class="muted small">每个账号独立同步、独立启停。停用后不会再拉取新邮件。</p>
+          </div>
+          <span class="card-tag">{{len .Accounts}} 个</span>
+        </div>
+
+        {{if .Accounts}}
+        <div class="account-list">
+          {{range .Accounts}}
+          <article class="account-card" data-account-id="{{.ID}}">
+            <div class="account-card-top">
+              <span class="account-avatar" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M4 6h16v12H4z"/><path d="m4 7 8 6 8-6"/></svg>
+              </span>
+              <div class="account-identity">
+                <h3>{{.Email}}</h3>
+                <p><span class="account-dot" style="background:{{accountColor .ID}}"></span>{{if .DisplayName}}{{.DisplayName}} · {{end}}{{.Provider}}</p>
+              </div>
+              <span class="status-pill status-{{.Status}}">
+                {{if eq .Status "active"}}正常
+                {{else if eq .Status "disabled"}}已停用
+                {{else if eq .Status "auth_failed"}}认证失败
+                {{else if eq .Status "error"}}异常
+                {{else}}{{.Status}}{{end}}
+              </span>
+            </div>
+
+            <dl class="account-facts">
+              <div><dt>IMAP</dt><dd>{{.IMAPHost}}:{{.IMAPPort}}{{if .IMAPSecure}} · SSL{{end}}</dd></div>
+              <div><dt>SMTP</dt><dd>{{.SMTPHost}}:{{.SMTPPort}}{{if .SMTPSecure}} · SSL{{end}}</dd></div>
+              <div><dt>上次同步</dt><dd>{{if .LastSyncedAt}}{{formatTime .LastSyncedAt}}{{else}}从未同步{{end}}</dd></div>
+            </dl>
+
+            {{if .LastError}}<p class="account-error">{{.LastError}}</p>{{end}}
+
+            <div class="account-actions">
+              <button type="button" class="btn" data-action="edit-account" data-id="{{.ID}}">编辑</button>
+              <button type="button" class="btn" data-action="test-account" data-id="{{.ID}}">测试连接</button>
+              <button type="button" class="btn" data-action="sync-account" data-id="{{.ID}}">立即同步</button>
+              <button type="button" class="btn" data-action="toggle-account" data-id="{{.ID}}" data-status="{{.Status}}">{{if eq .Status "disabled"}}启用{{else}}停用{{end}}</button>
+              <button type="button" class="btn btn-danger" data-action="delete-account" data-id="{{.ID}}">删除</button>
+            </div>
+          </article>
+          {{end}}
+        </div>
+        {{else}}
+        <div class="empty-state">
+          <span class="empty-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M4 6h16v12H4z"/><path d="m4 7 8 6 8-6"/></svg>
+          </span>
+          <h3>还没有邮箱账号</h3>
+          <p>从下方添加第一个账号。添加后会自动连接服务器并发现文件夹。</p>
+        </div>
+        {{end}}
+      </section>
+
+      <section class="card form-card" id="accountFormCard">
+        <div class="card-head">
+          <div>
+            <h2 id="accountFormTitle">添加账号</h2>
+            <p class="muted small">支持 Gmail、Outlook、QQ、163 和任意标准 IMAP/SMTP 服务。</p>
+          </div>
+          <span class="card-tag" id="accountFormMode">新建</span>
+        </div>
+        <form id="accountForm" class="account-form" method="post" action="/api/accounts" autocomplete="off">
+          <input type="hidden" name="accountId" value="">
+
+          <fieldset class="form-section">
+            <legend>基本信息</legend>
+            <div class="form-grid">
+              <div class="form-row">
+                <label for="provider">服务商</label>
+                <select id="provider" name="provider">
+                  <option value="">自动识别</option>
+                  {{range .Providers}}<option value="{{.Key}}">{{.Name}}</option>{{end}}
+                  <option value="imap">自定义 IMAP/SMTP</option>
+                </select>
+                <p class="field-help">选择已知服务商时会自动填入服务器地址。</p>
+              </div>
+              <div class="form-row">
+                <label for="email">邮箱地址</label>
+                <input id="email" name="email" type="email" required autocomplete="username" placeholder="me@gmail.com">
+              </div>
+              <div class="form-row">
+                <label for="displayName">显示名称</label>
+                <input id="displayName" name="displayName" type="text" placeholder="个人邮箱">
+              </div>
+              <div class="form-row">
+                <label for="username">登录用户名</label>
+                <input id="username" name="username" type="text" placeholder="默认与邮箱相同">
+              </div>
+            </div>
+          </fieldset>
+
+          <fieldset class="form-section">
+            <legend>登录凭据</legend>
+            <div class="form-grid">
+              <div class="form-row">
+                <label for="password" id="passwordLabel">密码 / 应用专用密码</label>
+                <input id="password" name="password" type="password" required autocomplete="new-password">
+                <p class="field-help" id="passwordHint" hidden>留空表示不修改现有密码。</p>
+              </div>
+            </div>
+          </fieldset>
+
+          <details class="form-advanced" id="serverDetails">
+            <summary>服务器设置 <span class="summary-note">自定义服务商时必填</span></summary>
+            <div class="server-grid">
+              <div class="server-block">
+                <div class="server-block-head"><strong>IMAP</strong><span>收信服务器</span></div>
+                <div class="server-fields">
+                  <div class="form-row"><label for="imapHost">主机</label><input id="imapHost" name="imapHost" type="text" placeholder="imap.example.com"></div>
+                  <div class="form-row"><label for="imapPort">端口</label><input id="imapPort" name="imapPort" type="number" placeholder="993"></div>
+                </div>
+                <label class="check-line"><input id="imapSecure" name="imapSecure" type="checkbox" checked> 使用 SSL/TLS（993 端口）</label>
+              </div>
+              <div class="server-block">
+                <div class="server-block-head"><strong>SMTP</strong><span>发信服务器</span></div>
+                <div class="server-fields">
+                  <div class="form-row"><label for="smtpHost">主机</label><input id="smtpHost" name="smtpHost" type="text" placeholder="smtp.example.com"></div>
+                  <div class="form-row"><label for="smtpPort">端口</label><input id="smtpPort" name="smtpPort" type="number" placeholder="465"></div>
+                </div>
+                <label class="check-line"><input id="smtpSecure" name="smtpSecure" type="checkbox" checked> 使用 SSL/TLS（465 端口）</label>
+              </div>
+            </div>
+          </details>
+
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary" id="accountSubmit">添加账号</button>
+            <button type="button" class="btn" id="accountCancel" hidden>取消编辑</button>
+            <span class="muted small" id="accountFormHint">添加后会在后台连接服务器并发现文件夹</span>
+          </div>
+        </form>
+      </section>
+
+      <section class="future-grid" aria-label="未来功能预留">
+        <article class="future-card">
+          <span class="future-icon" aria-hidden="true">01</span>
+          <h3>通知与提醒</h3>
+          <p>验证码通知、新邮件桌面提醒与免打扰时段。</p>
+          <span class="soon">预留</span>
+        </article>
+        <article class="future-card">
+          <span class="future-icon" aria-hidden="true">02</span>
+          <h3>签名与模板</h3>
+          <p>按账号设置默认签名、快捷回复和邮件模板。</p>
+          <span class="soon">预留</span>
+        </article>
+        <article class="future-card">
+          <span class="future-icon" aria-hidden="true">03</span>
+          <h3>自动化规则</h3>
+          <p>按发件人、主题或关键词自动归档、标星和分类。</p>
+          <span class="soon">预留</span>
+        </article>
+      </section>
+    </div>
+  </div>
+</main>{{template "zmailData" .}}
+{{template "scripts" .}}
+<script nonce="{{.Nonce}}">
+(function () {
+  'use strict';
+  var cfg = window.__ZMAIL__ || {};
+  var statusEl = document.getElementById('accountStatus');
+  var modeEl = document.getElementById('accountFormMode');
+  var form = document.getElementById('accountForm');
+  var titleEl = document.getElementById('accountFormTitle');
+  var submitEl = document.getElementById('accountSubmit');
+  var cancelEl = document.getElementById('accountCancel');
+  var hintEl = document.getElementById('accountFormHint');
+  var passwordEl = document.getElementById('password');
+  var passwordLabel = document.getElementById('passwordLabel');
+  var passwordHint = document.getElementById('passwordHint');
+  var detailsEl = document.getElementById('serverDetails');
+  var editingId = '';
+
+  function basePath() {
+    try {
+      var p = new URL(cfg.baseUrl || '').pathname.replace(/\/+$/, '');
+      return p === '/' ? '' : p;
+    } catch (e) {
+      return '';
+    }
+  }
+  var base = basePath();
+
+  function setStatus(text, isError) {
+    if (!statusEl) return;
+    statusEl.textContent = text || '';
+    statusEl.className = 'form-status' + (isError ? ' error' : '');
+  }
+
+  function setBusy(busy) {
+    Array.prototype.forEach.call(document.querySelectorAll('[data-action]'), function (b) { b.disabled = busy; });
+    if (submitEl) submitEl.disabled = busy;
+    if (cancelEl) cancelEl.disabled = busy;
+  }
+
+  function api(path, opts) {
+    opts = opts || {};
+    var headers = Object.assign({ Accept: 'application/json' }, opts.headers || {});
+    var body = opts.body;
+    if (body != null && typeof body !== 'string') {
+      headers['Content-Type'] = 'application/json';
+      body = JSON.stringify(body);
+    }
+    if (cfg.csrfToken) headers['X-CSRF-Token'] = cfg.csrfToken;
+    return fetch(base + path, {
+      method: opts.method || 'GET',
+      credentials: 'same-origin',
+      headers: headers,
+      body: body
+    }).then(function (res) {
+      if (res.status === 401) {
+        location.href = base + '/login?next=' + encodeURIComponent(location.pathname + location.search);
+        throw new Error('登录已过期');
+      }
+      return res.text().then(function (text) {
+        var data = null;
+        try { data = text ? JSON.parse(text) : null; } catch (e) { data = null; }
+        if (!res.ok) {
+          var msg = (data && data.error && data.error.message) || ('请求失败（HTTP ' + res.status + '）');
+          throw new Error(msg);
+        }
+        return data;
+      });
+    });
+  }
+
+  function num(name) {
+    if (!form) return 0;
+    var el = form.elements[name];
+    if (!el || !el.value) return 0;
+    var n = parseInt(el.value, 10);
+    return isNaN(n) ? 0 : n;
+  }
+
+  function setMode(mode, acc) {
+    if (!form) return;
+    editingId = mode === 'edit' && acc ? acc.id : '';
+    form.elements.accountId.value = editingId;
+    if (titleEl) titleEl.textContent = editingId ? '编辑账号' : '添加账号';
+    if (modeEl) modeEl.textContent = editingId ? '编辑' : '新建';
+    if (submitEl) submitEl.textContent = editingId ? '保存修改' : '添加账号';
+    if (hintEl) hintEl.textContent = editingId ? '保存后会重新连接该账号并刷新文件夹' : '添加后会在后台连接服务器并发现文件夹';
+    if (cancelEl) cancelEl.hidden = !editingId;
+    if (passwordEl) {
+      passwordEl.required = !editingId;
+      passwordEl.value = '';
+      passwordEl.placeholder = editingId ? '留空表示不修改' : '';
+    }
+    if (passwordLabel) passwordLabel.textContent = editingId ? '新密码 / 应用专用密码' : '密码 / 应用专用密码';
+    if (passwordHint) passwordHint.hidden = !editingId;
+
+    if (!editingId) {
+      form.reset();
+      form.elements.accountId.value = '';
+      if (detailsEl) detailsEl.open = false;
+      return;
+    }
+    var el = form.elements;
+    el.provider.value = acc.provider || '';
+    el.email.value = acc.email || '';
+    el.displayName.value = acc.displayName || '';
+    el.username.value = acc.username || '';
+    el.imapHost.value = (acc.imap && acc.imap.host) || '';
+    el.imapPort.value = (acc.imap && acc.imap.port) || '';
+    el.imapSecure.checked = !!(acc.imap && acc.imap.secure);
+    el.smtpHost.value = (acc.smtp && acc.smtp.host) || '';
+    el.smtpPort.value = (acc.smtp && acc.smtp.port) || '';
+    el.smtpSecure.checked = !!(acc.smtp && acc.smtp.secure);
+    if (detailsEl) detailsEl.open = true;
+  }
+
+  if (form) {
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      var el = form.elements;
+      var password = el.password.value;
+      var payload = {
+        provider: el.provider.value.trim(),
+        email: el.email.value.trim(),
+        displayName: el.displayName.value.trim(),
+        username: el.username.value.trim(),
+        imapHost: el.imapHost.value.trim(),
+        smtpHost: el.smtpHost.value.trim(),
+        imapSecure: !!el.imapSecure.checked,
+        smtpSecure: !!el.smtpSecure.checked
+      };
+      if (password) payload.password = password;
+      if (num('imapPort')) payload.imapPort = num('imapPort');
+      if (num('smtpPort')) payload.smtpPort = num('smtpPort');
+
+      var editing = !!editingId;
+      setBusy(true);
+      setStatus(editing ? '正在保存修改…' : '正在保存并验证账号…', false);
+      api(editing ? '/api/accounts/' + encodeURIComponent(editingId) : '/api/accounts', {
+        method: editing ? 'PUT' : 'POST',
+        body: payload
+      }).then(function () {
+        setStatus(editing ? '修改已生效，正在重新连接…' : '账号已添加', false);
+        location.reload();
+      }).catch(function (err) {
+        setStatus(err.message, true);
+        setBusy(false);
+      });
+    });
+  }
+
+  if (cancelEl) {
+    cancelEl.addEventListener('click', function () {
+      setMode('create');
+      setStatus('', false);
+    });
+  }
+
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    var action = btn.getAttribute('data-action');
+    var id = btn.getAttribute('data-id');
+    if (!id) return;
+    if (action === 'edit-account') {
+      setStatus('正在加载账号信息…', false);
+      api('/api/accounts/' + encodeURIComponent(id))
+        .then(function (data) {
+          var acc = data && data.account;
+          if (!acc) throw new Error('账号不存在');
+          setMode('edit', acc);
+          setStatus('正在编辑 ' + acc.email, false);
+          if (form && form.scrollIntoView) form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        })
+        .catch(function (err) { setStatus(err.message, true); });
+    } else if (action === 'test-account') {
+      btn.disabled = true;
+      setStatus('正在测试连接…', false);
+      api('/api/accounts/' + encodeURIComponent(id) + '/test', { method: 'POST' })
+        .then(function (data) { setStatus('连接正常（' + ((data && data.status) || 'ok') + '）', false); })
+        .catch(function (err) { setStatus(err.message, true); })
+        .then(function () { btn.disabled = false; });
+    } else if (action === 'sync-account') {
+      btn.disabled = true;
+      setStatus('已触发同步…', false);
+      api('/api/accounts/' + encodeURIComponent(id) + '/sync', { method: 'POST' })
+        .then(function () { setStatus('同步已在后台开始', false); })
+        .catch(function (err) { setStatus(err.message, true); })
+        .then(function () { btn.disabled = false; });
+    } else if (action === 'toggle-account') {
+      var disabled = btn.getAttribute('data-status') === 'disabled';
+      btn.disabled = true;
+      setStatus(disabled ? '正在启用账号…' : '正在停用账号…', false);
+      api('/api/accounts/' + encodeURIComponent(id), {
+        method: 'PUT',
+        body: { status: disabled ? 'active' : 'disabled' }
+      }).then(function () {
+        setStatus(disabled ? '账号已启用' : '账号已停用', false);
+        location.reload();
+      }).catch(function (err) { setStatus(err.message, true); btn.disabled = false; });
+    } else if (action === 'delete-account') {
+      if (!window.confirm('确定删除该账号及其全部邮件吗？此操作不可撤销。')) return;
+      setStatus('正在删除账号…', false);
+      api('/api/accounts/' + encodeURIComponent(id), { method: 'DELETE' })
+        .then(function () { location.reload(); })
+        .catch(function (err) { setStatus(err.message, true); });
+    }
+  });
+})();
+</script>
+</body>
+</html>

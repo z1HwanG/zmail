@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+{{template "head" .}}
+</head>
+<body class="page-login">
+<main class="login-card">
+  <a class="login-brand" href="/login" aria-label="zMail">
+    <img class="login-icon" src="/static/icons/icon.svg" width="42" height="42" alt=""><span class="brand-word">z<em>Mail</em></span>
+  </a>
+  <h1>回到你的收件箱</h1>
+  <p class="intro">所有邮箱，在一个安静的地方。输入访问密码继续。</p>
+  {{if .Error}}<div class="form-error" role="alert">{{.Error}}</div>{{end}}
+  <form method="post" action="/login" class="login-form">
+    <input type="hidden" name="next" value="{{.Next}}">
+    <label for="password">访问密码</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" autofocus required>
+    <button type="submit">登录</button>
+  </form>
+  <p class="login-foot">密码由 APP_PASSWORD 环境变量配置。zMail 在本机运行，邮件与凭据不会离开你的设备。</p>
+</main>
+{{template "zmailData" .}}
+</body>
+</html>

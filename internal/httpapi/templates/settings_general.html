@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+{{template "head" .}}
+</head>
+<body class="page-settings">
+{{template "topbar" .}}
+<main class="settings">
+  <div class="settings-layout">
+    <aside class="settings-rail" aria-label="设置分区">
+      <p class="rail-label">设置</p>
+      <nav class="rail-nav">
+        <a class="rail-item" href="/settings/accounts">邮箱账号 <span class="rail-count">{{.Stats.Accounts}}</span></a>
+        <a class="rail-item active" href="/settings/general" aria-current="page">通用设置</a>
+      </nav>
+      <p class="rail-label">预留分区</p>
+      <div class="rail-future" aria-label="未来功能占位">
+        <span class="rail-item is-disabled">通知与提醒 <em>以后</em></span>
+        <span class="rail-item is-disabled">签名与模板 <em>以后</em></span>
+        <span class="rail-item is-disabled">自动化规则 <em>以后</em></span>
+        <span class="rail-item is-disabled">数据与备份 <em>以后</em></span>
+      </div>
+    </aside>
+
+    <div class="settings-content">
+      <header class="settings-page-head">
+        <div>
+          <p class="settings-kicker">Settings / General</p>
+          <h1>通用设置</h1>
+          <p>zMail 的运行状态、存储统计与外观选项。新增设置项会优先放在这个页面。</p>
+        </div>
+      </header>
+
+      <div class="settings-summary" aria-label="运行概览">
+        <div class="summary-item"><span>账号</span><strong>{{.Stats.Accounts}}</strong><small>个邮箱</small></div>
+        <div class="summary-item"><span>邮件</span><strong>{{.Stats.Messages}}</strong><small>封已存储</small></div>
+        <div class="summary-item"><span>未读</span><strong>{{.Stats.Unread}}</strong><small>封待处理</small></div>
+      </div>
+
+      <section class="card">
+        <div class="card-head">
+          <div><h2>存储概览</h2><p class="muted small">本地 SQLite 数据库与附件目录的统计。</p></div>
+        </div>
+        <dl class="stats">
+          <div><dt>账号</dt><dd>{{.Stats.Accounts}}</dd></div>
+          <div><dt>文件夹</dt><dd>{{.Stats.Folders}}</dd></div>
+          <div><dt>邮件</dt><dd>{{.Stats.Messages}}</dd></div>
+          <div><dt>未读</dt><dd>{{.Stats.Unread}}</dd></div>
+          <div><dt>星标</dt><dd>{{.Stats.Starred}}</dd></div>
+        </dl>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <div><h2>外观</h2><p class="muted small">主题默认跟随系统，选择会保存在浏览器本地。</p></div>
+          <span class="card-tag">跟随系统</span>
+        </div>
+        <p class="muted small">点击右上角的 ◐ 可在浅色与深色之间切换。</p>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <div><h2>服务信息</h2><p class="muted small">当前实例的公开地址与会话信息。</p></div>
+        </div>
+        <dl class="stats">
+          <div><dt>公开地址</dt><dd class="stat-url">{{.PublicURL}}</dd></div>
+          <div><dt>账号数</dt><dd>{{len .Accounts}}</dd></div>
+        </dl>
+        <form method="post" action="/logout" class="logout-form">
+          <button type="submit" class="btn btn-danger">退出登录</button>
+        </form>
+      </section>
+
+      <section class="future-grid" aria-label="未来功能预留">
+        <article class="future-card">
+          <span class="future-icon" aria-hidden="true">01</span>
+          <h3>通知与提醒</h3>
+          <p>桌面通知、验证码提醒和免打扰时间窗口。</p>
+          <span class="soon">预留</span>
+        </article>
+        <article class="future-card">
+          <span class="future-icon" aria-hidden="true">02</span>
+          <h3>签名与模板</h3>
+          <p>默认签名、快捷回复、常用收件人组。</p>
+          <span class="soon">预留</span>
+        </article>
+        <article class="future-card">
+          <span class="future-icon" aria-hidden="true">03</span>
+          <h3>数据与备份</h3>
+          <p>导出邮件、备份数据库与清理本地缓存。</p>
+          <span class="soon">预留</span>
+        </article>
+      </section>
+    </div>
+  </div>
+</main>
+{{template "zmailData" .}}
+{{template "scripts" .}}
+</body>
+</html>
