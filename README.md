@@ -1,7 +1,6 @@
 # zMail
 
 [![Release](https://img.shields.io/github/v/release/z1HwanG/zmail?display_name=tag&label=release)](https://github.com/z1HwanG/zmail/releases)
-
 [![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -59,42 +58,40 @@ go run ./cmd/zmail
 make build
 make check
 
-# 静态分析与构建
+# 测试文件若在本地可运行；发布仓库不跟踪测试脚本
+go test ./... # 仅本地测试文件存在时
+
 go vet ./...
 go build ./cmd/zmail
 ~~~
 
-Windows 可用 make.cmd build、make.cmd check。`.forgejo/workflows/ci.yml` 会在 Forgejo Actions 上检查 gofmt、go vet 和构建；真实 IMAP/SMTP 连接与反向代理需在部署环境另外验收。
+Windows 可用 make.cmd build、make.cmd check。Forgejo Actions 工作流会检查已跟踪 Go 文件的格式、go vet 与构建；测试脚本按发布策略仅留在开发者本地。真实 IMAP/SMTP 连接与反向代理需在部署环境另外验收。
 
 ## Forgejo Actions 自动部署
 
-可用 Forgejo Actions 在推送到 main 后构建 Linux 二进制，通过 SSH 安装到服务器应用目录并重启 systemd 服务。服务器应预先创建服务和运行配置，并通过 sudoers 仅允许部署账号运行固定的部署脚本。**不要将数据库、原始邮件、附件或密钥放在发布二进制目录中**；它们应位于独立的持久化数据目录。
+Forgejo Actions 可在推送到 main 后构建 Linux 二进制，通过 SSH 部署到服务器并重启服务。服务器应预先配置服务、持久化数据目录和专用部署账号。**数据库、原始邮件、附件及密钥不得放在会替换的二进制目录中。**
 
-### 配置仓库 Secrets
-
-在 Forgejo 仓库的 Actions Secrets 中配置：
+### 仓库 Secrets
 
 | Secret | 说明 |
 |---|---|
 | DEPLOY_HOST | 服务器主机名或地址 |
-| DEPLOY_USER | 专用、受限的 SSH 部署用户 |
+| DEPLOY_USER | 受限的 SSH 部署用户 |
 | DEPLOY_SSH_KEY | 部署专用私钥 |
 | DEPLOY_KNOWN_HOSTS | 预先核验的 SSH 主机公钥记录 |
-| DEPLOY_INSTALL_SCRIPT | 固定的服务器部署脚本，例如 `/usr/local/sbin/deploy-zmail` |
+| DEPLOY_INSTALL_SCRIPT | 服务器固定部署脚本，例如 /usr/local/sbin/deploy-zmail |
 
-### 添加工作流
+### 工作流示例
 
-创建 .forgejo/workflows/deploy.yml：
+创建 .forgejo/workflows/deploy.yml；将 runs-on 改为 Forgejo Runner 实际标签：
 
 ~~~yaml
 name: Deploy
 on:
   push:
     branches: [main]
-
 jobs:
   deploy:
-    # 替换成 Forgejo Runner 注册时配置的标签。
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -103,9 +100,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: 1.26.x
-      - name: Build Linux binary
+      - name: Build
         run: CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$(git describe --tags --always)" -o zmail ./cmd/zmail
-      - name: Install and restart
+      - name: Deploy
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
@@ -121,20 +118,18 @@ jobs:
           ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes "$DEPLOY_USER@$DEPLOY_HOST" "sudo -n '$DEPLOY_INSTALL_SCRIPT' '/tmp/zmail-$GITHUB_SHA'"
 ~~~
 
-先确认 Runner 标签、专用部署用户以及服务器上的 /usr/local/sbin/deploy-zmail。该脚本应校验输入文件、原子替换固定路径下的二进制并重启服务；sudo 仅授权执行此固定脚本。推送到 main 后检查 Actions 日志、服务状态和 /healthz。完整手动部署步骤见 [docs/DEPLOY.md](docs/DEPLOY.md)。
-
-> 上述流程用于说明部署模式；本仓库不包含你的服务器地址、私钥、主机指纹或 systemd 配置。请将这些值保存在 Forgejo Secrets，不要写入仓库。
+服务器上的固定部署脚本应校验输入并原子替换二进制，再重启服务；sudoers 只允许部署用户执行该脚本。首次部署前先在服务器手动安装并验证脚本，再推送到 main；检查 Actions 日志、服务状态及 /healthz。完整手动部署流程见 [docs/DEPLOY.md](docs/DEPLOY.md)。
 
 ## 目录结构
 
 ~~~text
 cmd/zmail/                 程序入口
 internal/mail/             IMAP 同步、文件夹识别、SMTP 发信
-internal/store/            SQLite 与原始邮件/附件存储
-internal/httpapi/          HTTP API 和 HTML 页面
-internal/web/static/       内置 CSS、JavaScript、图标与 PWA 资源
-deploy/                    Docker、systemd 和环境变量示例
-docs/                      架构、部署及邮箱服务商指南
+internal/store/            SQLite 与邮件/附件存储
+internal/httpapi/          HTTP API 和页面
+internal/web/static/       内置 CSS、JavaScript、图标和 PWA
+deploy/                    Docker、systemd 和配置示例
+docs/                      架构与部署文档
 ~~~
 
 ## 版本与许可
