@@ -58,14 +58,14 @@ go run ./cmd/zmail
 make build
 make check
 
-# 测试文件若在本地可运行；发布仓库不跟踪测试脚本
-go test ./... # 仅本地测试文件存在时
+# 若维护者本地保留了测试文件，可运行
+go test ./...
 
 go vet ./...
 go build ./cmd/zmail
 ~~~
 
-Windows 可用 make.cmd build、make.cmd check。Forgejo Actions 工作流会检查已跟踪 Go 文件的格式、go vet 与构建；测试脚本按发布策略仅留在开发者本地。真实 IMAP/SMTP 连接与反向代理需在部署环境另外验收。
+Windows 可用 make.cmd build、make.cmd check。Forgejo Actions 工作流会检查已跟踪 Go 文件的格式、go vet 与构建；测试脚本按发布策略仅保留在维护者本地，不纳入仓库。真实 IMAP/SMTP 连接与反向代理需在部署环境另外验收。
 
 ## Forgejo Actions 自动部署
 
