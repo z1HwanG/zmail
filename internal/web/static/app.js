@@ -28,13 +28,14 @@
     folderEls: {},
     badgeEls: {},
     allInboxBadge: null,
+    allSentBadge: null,
     nodes: {},
     messages: [],
     byId: {},
     cursor: null,
     hasMore: false,
     loading: false,
-    scope: 'inbox',
+    scope: (new URLSearchParams(window.location.search).get('scope') === 'sent' ? 'sent' : 'inbox'),
     folderId: cfg.folderId || null,
     folderName: '全部收件箱',
     selectedId: null,
@@ -553,10 +554,16 @@
       unread: 0
     });
     all.setAttribute('data-all', '1');
-    if (!state.folderId) all.classList.add('active');
+    if (!state.folderId && state.scope !== 'sent') all.classList.add('active');
     s(state.badgeEls, '__all__', all.querySelector('.badge'));
     el.sidebarContent.appendChild(all);
     state.allInboxBadge = all.querySelector('.badge');
+
+    var sentAll = folderButton({ key: '__all_sent__', name: '已发送', label: '已发送', icon: folderIcon('sent'), unread: 0 });
+    sentAll.setAttribute('data-scope', 'sent');
+    if (!state.folderId && state.scope === 'sent') sentAll.classList.add('active');
+    el.sidebarContent.appendChild(sentAll);
+    state.allSentBadge = sentAll.querySelector('.badge');
 
     state.accounts.forEach(function (acc, idx) {
       var group = div('account-group');
@@ -669,11 +676,12 @@
   async function selectFolder(btn) {
     var fid = btn.getAttribute('data-folder-id') || '';
     var all = btn.getAttribute('data-all') === '1';
-    if (!all && !fid) return;
-    state.folderId = all ? null : fid;
+    var scope = btn.getAttribute('data-scope') || '';
+    if (!all && !fid && !scope) return;
+    state.folderId = (all || scope) ? null : fid;
     var f = folderById(fid);
-    state.folderName = all ? '全部收件箱' : (f ? folderLabel(f) : '邮件');
-    state.scope = state.folderId ? '' : 'inbox';
+    state.folderName = all ? '全部收件箱' : (scope === 'sent' ? '已发送' : (f ? folderLabel(f) : '邮件'));
+    state.scope = scope || (state.folderId ? '' : 'inbox');
     state.mode = 'list';
     state.searchQuery = '';
     if (el.search) el.search.value = '';
@@ -689,7 +697,8 @@
     var buttons = el.sidebarContent.querySelectorAll('.folder-item');
     Array.prototype.forEach.call(buttons, function (b) {
       var isAll = b.getAttribute('data-all') === '1';
-      var active = isAll ? !state.folderId : b.getAttribute('data-folder-id') === state.folderId;
+      var scope = b.getAttribute('data-scope') || '';
+      var active = scope ? (!state.folderId && state.scope === scope) : (isAll ? (!state.folderId && state.scope !== 'sent') : b.getAttribute('data-folder-id') === state.folderId);
       b.classList.toggle('active', !!active);
     });
   }
@@ -699,7 +708,7 @@
   function messageQuery(first) {
     var q = new URLSearchParams();
     if (state.folderId) q.set('folderId', state.folderId);
-    else q.set('scope', 'inbox');
+    else q.set('scope', state.scope === 'sent' ? 'sent' : 'inbox');
     q.set('limit', '30');
     if (!first && state.cursor) q.set('before', state.cursor);
     return API + '/messages?' + q.toString();
@@ -882,11 +891,13 @@
     try {
       var body = { limit: 50 };
       if (state.folderId) body.folderId = state.folderId;
-      else body.scope = 'inbox';
+      else body.scope = state.scope === 'sent' ? 'sent' : 'inbox';
       var data = await api(API + '/messages/backfill', { method: 'POST', body: body });
       var inserted = (data && data.inserted) || 0;
       if (!inserted) {
-        toastText((data && data.done) ? '服务器上没有更早的邮件了' : '暂时没有拉到更早的邮件，可稍后重试');
+        var finished = !!(data && data.done);
+        toastText(finished ? '服务器上没有更早的邮件了' : '暂时没有拉到更早的邮件，可稍后重试');
+        if (finished) state.hasMore = false;
         return;
       }
       var last = state.messages[state.messages.length - 1];
@@ -1812,6 +1823,10 @@
   function matchesView(m) {
     if (state.mode === 'search') return false;
     if (state.folderId) return m.folderId === state.folderId;
+    if (state.scope === 'sent') {
+      var sentFolder = folderOfMessage(m);
+      if (sentFolder) return sentFolder.role === 'sent';
+    }
     if (state.scope !== 'inbox') return false;
     var f = folderOfMessage(m);
     if (f) return f.role === 'inbox';
@@ -1977,6 +1992,10 @@
       label: '全部收件箱', kind: '文件夹', group: '跳转',
       run: function () { selectFolderByAttrs(null, '全部收件箱'); }
     });
+    items.push({
+      label: '已发送', kind: '文件夹', group: '跳转',
+      run: function () { selectFolderByAttrs(null, '已发送'); }
+    });
     state.accounts.forEach(function (acc) {
       state.folders.filter(function (f) { return f.accountId === acc.id; }).forEach(function (f) {
         items.push({
@@ -2016,7 +2035,7 @@
 
   function selectFolderByAttrs(folderId, name) {
     state.folderId = folderId || null;
-    state.scope = folderId ? '' : 'inbox';
+    state.scope = folderId ? '' : (name === '已发送' ? 'sent' : 'inbox');
     state.folderName = name || '全部收件箱';
     state.mode = 'list';
     state.searchQuery = '';

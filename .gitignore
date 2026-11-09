@@ -30,3 +30,16 @@ Thumbs.db
 *.log
 *.out
 coverage.*
+
+# 测试脚本仅保留在本地，不提交到仓库
+internal/config/config_test.go
+internal/config/dotenv_test.go
+internal/httpapi/auth_test.go
+internal/httpapi/backfill_scope_test.go
+internal/httpapi/sanitize_test.go
+internal/imgproxy/ssrf_test.go
+internal/mail/security_test.go
+internal/secret/secret_test.go
+internal/store/concurrency_test.go
+internal/store/jobs_test.go
+internal/store/message_folder_roles_test.go

@@ -801,6 +801,7 @@ func (m *Manager) DiscoverFolders(ctx context.Context, accountID string) ([]*sto
 		return nil, fmt.Errorf("mail: LIST 文件夹失败: %w", err)
 	}
 
+	canonicalRoles := canonicalFolderRoles(infos)
 	out := make([]*store.Folder, 0, len(infos))
 	inboxSeen := false
 	for _, info := range infos {
@@ -808,6 +809,11 @@ func (m *Manager) DiscoverFolders(ctx context.Context, accountID string) ([]*sto
 			continue
 		}
 		role := folderRole(info)
+		originalRole := role
+		if role != store.RoleCustom && canonicalRoles[role] != info.Name {
+			// 多个远端路径映射到同一系统角色时，只保留一个规范目标；其余仍作为普通文件夹同步。
+			role = store.RoleCustom
+		}
 		if role == store.RoleInbox {
 			if inboxSeen {
 				role = store.RoleCustom
@@ -815,10 +821,20 @@ func (m *Manager) DiscoverFolders(ctx context.Context, accountID string) ([]*sto
 				inboxSeen = true
 			}
 		}
+		name := displayFolderName(info.Name)
+		if role == store.RoleCustom && originalRole != store.RoleCustom {
+			// 将重复系统角色降级为普通文件夹时保留完整路径，避免同名别名看起来仍是重复目录。
+			name = info.Name
+		}
+		if role == store.RoleSent {
+			name = "已发送"
+		} else if role == store.RoleInbox {
+			name = "收件箱"
+		}
 		f := &store.Folder{
 			AccountID:  acc.ID,
 			RemotePath: info.Name,
-			Name:       displayFolderName(info.Name),
+			Name:       name,
 			Role:       role,
 			Priority:   folderPriority(role),
 			Enabled:    defaultEnabled(role),
@@ -837,6 +853,54 @@ func (m *Manager) DiscoverFolders(ctx context.Context, accountID string) ([]*sto
 			continue
 		}
 		out = append(out, f)
+	}
+
+	// LIST 会更新当前发现的文件夹；同时清理数据库中已不存在或已被替代的旧角色，
+	// 防止发信误选历史的 Sent 文件夹。
+	if stored, lerr := m.st.ListFolders(ctx, acc.ID); lerr == nil {
+		listedPaths := make(map[string]struct{}, len(infos))
+		for _, info := range infos {
+			if info != nil {
+				listedPaths[info.Name] = struct{}{}
+			}
+		}
+		for _, f := range stored {
+			if f == nil {
+				continue
+			}
+			if _, exists := listedPaths[f.RemotePath]; exists {
+				if role := folderRoleForCanonicalPath(f.RemotePath, infos); role != "" {
+					if name := folderNameForPath(f.RemotePath, infos); name != "" {
+						f.Name = name
+					}
+					if role == f.Role {
+						if err := m.st.UpsertFolder(ctx, f); err != nil {
+							m.log.Warn("更新文件夹名称失败", "account", acc.ID, "folder", f.RemotePath, "error", err)
+						}
+						continue
+					}
+					f.Role = role
+					f.Priority = folderPriority(role)
+					if role == store.RoleInbox {
+						f.Enabled = true
+					}
+					if err := m.st.UpsertFolder(ctx, f); err != nil {
+						m.log.Warn("更新文件夹角色失败", "account", acc.ID, "folder", f.RemotePath, "error", err)
+					}
+				}
+				continue
+			}
+			if f.Role == store.RoleInbox || f.Role == store.RoleCustom {
+				continue
+			}
+			if remotePath, ok := canonicalRoles[f.Role]; ok && remotePath == f.RemotePath {
+				continue
+			}
+			f.Role = store.RoleCustom
+			if err := m.st.UpsertFolder(ctx, f); err != nil {
+				m.log.Warn("清理旧文件夹角色失败", "account", acc.ID, "folder", f.RemotePath, "error", err)
+			}
+		}
 	}
 
 	// 确保账号始终有一个收件箱：LIST 没有 INBOX 时补一条。
@@ -899,49 +963,196 @@ func shouldSkipFolder(provider string, info *imap.MailboxInfo) bool {
 	return false
 }
 
+func folderNameForPath(path string, infos []*imap.MailboxInfo) string {
+	for _, info := range infos {
+		if info == nil || info.Name != path {
+			continue
+		}
+		role := folderRoleForCanonicalPath(path, infos)
+		if role == store.RoleSent {
+			return "已发送"
+		}
+		if role == store.RoleCustom && folderRole(info) != store.RoleCustom {
+			return info.Name
+		}
+		return displayFolderName(info.Name)
+	}
+	return ""
+}
+
+func folderRoleForCanonicalPath(path string, infos []*imap.MailboxInfo) string {
+	canonical := canonicalFolderRoles(infos)
+	for _, info := range infos {
+		if info != nil && info.Name == path {
+			role := folderRole(info)
+			if role == store.RoleInbox || role == store.RoleCustom || canonical[role] == path {
+				return role
+			}
+			return store.RoleCustom
+		}
+	}
+	return ""
+}
+
+// canonicalFolderRoles 为一个服务器上重复声明的系统角色挑选规范路径；SPECIAL-USE 优先，
+// 否则按名称映射。这样所有系统角色（Sent、Drafts、Trash、Spam 等）都只会有一个目标。
+func canonicalFolderRoles(infos []*imap.MailboxInfo) map[string]string {
+	selected := make(map[string]*imap.MailboxInfo)
+	for _, info := range infos {
+		if info == nil || strings.TrimSpace(info.Name) == "" || hasMailboxAttr(info, imap.NoSelectAttr) {
+			continue
+		}
+		role := folderRole(info)
+		if role == store.RoleCustom {
+			continue
+		}
+		current := selected[role]
+		if current == nil || preferFolderForRole(info, current, role) {
+			selected[role] = info
+		}
+	}
+	out := make(map[string]string, len(selected))
+	for role, info := range selected {
+		out[role] = info.Name
+	}
+	return out
+}
+
+func preferFolderForRole(candidate, current *imap.MailboxInfo, role string) bool {
+	if role == store.RoleInbox {
+		candidateInbox := strings.EqualFold(strings.Trim(candidate.Name, "/"), imap.InboxName)
+		currentInbox := strings.EqualFold(strings.Trim(current.Name, "/"), imap.InboxName)
+		if candidateInbox != currentInbox {
+			return candidateInbox
+		}
+	}
+	candidateSpecial := folderHasSpecialUse(candidate, role)
+	currentSpecial := folderHasSpecialUse(current, role)
+	if candidateSpecial != currentSpecial {
+		return candidateSpecial
+	}
+	candidatePriority := folderNamePriority(candidate.Name, role)
+	currentPriority := folderNamePriority(current.Name, role)
+	if candidatePriority != currentPriority {
+		return candidatePriority < currentPriority
+	}
+	return strings.ToLower(candidate.Name) < strings.ToLower(current.Name)
+}
+
+func folderHasSpecialUse(info *imap.MailboxInfo, role string) bool {
+	attr := map[string]string{
+		store.RoleSent: imap.SentAttr, store.RoleDrafts: imap.DraftsAttr,
+		store.RoleTrash: imap.TrashAttr, store.RoleSpam: imap.JunkAttr,
+		store.RoleArchive: imap.ArchiveAttr,
+	}[role]
+	if attr == "" || info == nil {
+		return false
+	}
+	for _, got := range info.Attributes {
+		if strings.EqualFold(got, attr) {
+			return true
+		}
+	}
+	return false
+}
+
+func folderNamePriority(name, role string) int {
+	name = folderLeaf(name)
+	var preferred []string
+	switch role {
+	case store.RoleInbox:
+		preferred = []string{"inbox", "收件箱"}
+	case store.RoleSent:
+		preferred = []string{"sent items", "sent", "sent mail", "sent messages", "已发送", "已发送邮件", "发件箱", "发件箱邮件"}
+	case store.RoleDrafts:
+		preferred = []string{"drafts", "draft", "草稿"}
+	case store.RoleTrash:
+		preferred = []string{"trash", "deleted items", "deleted", "bin", "已删除", "垃圾箱"}
+	case store.RoleSpam:
+		preferred = []string{"junk", "spam", "垃圾邮件"}
+	case store.RoleArchive:
+		preferred = []string{"archive", "归档"}
+	}
+	for i, value := range preferred {
+		if name == value || strings.HasSuffix(name, "/"+value) || strings.HasSuffix(name, "."+value) {
+			return i
+		}
+	}
+	return len(preferred)
+}
+
 // folderRole 按 SPECIAL-USE 属性优先、名称启发式兜底映射文件夹角色。
+func folderLeaf(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if i := strings.LastIndex(name, "/"); i >= 0 {
+		name = name[i+1:]
+	}
+	if i := strings.LastIndex(name, string([]byte{92})); i >= 0 {
+		name = name[i+1:]
+	}
+	if i := strings.LastIndex(name, "."); i >= 0 {
+		name = name[i+1:]
+	}
+	return strings.TrimSpace(name)
+}
+
 func folderRole(info *imap.MailboxInfo) string {
 	if info == nil {
 		return store.RoleCustom
 	}
-	hasAttr := func(target string) bool {
-		for _, attr := range info.Attributes {
-			if strings.EqualFold(attr, target) {
-				return true
-			}
-		}
-		return false
+	if strings.EqualFold(strings.Trim(info.Name, "/"), imap.InboxName) {
+		return store.RoleInbox
 	}
 	switch {
-	case hasAttr(imap.SentAttr):
+	case hasMailboxAttr(info, imap.SentAttr):
 		return store.RoleSent
-	case hasAttr(imap.DraftsAttr):
+	case hasMailboxAttr(info, imap.DraftsAttr):
 		return store.RoleDrafts
-	case hasAttr(imap.TrashAttr):
+	case hasMailboxAttr(info, imap.TrashAttr):
 		return store.RoleTrash
-	case hasAttr(imap.JunkAttr):
+	case hasMailboxAttr(info, imap.JunkAttr):
 		return store.RoleSpam
-	case hasAttr(imap.ArchiveAttr):
+	case hasMailboxAttr(info, imap.ArchiveAttr):
 		return store.RoleArchive
 	}
 
-	name := strings.ToLower(strings.TrimSpace(info.Name))
-	trimmed := strings.Trim(name, "/")
+	name := folderLeaf(info.Name)
 	switch {
-	case trimmed == "inbox" || strings.HasSuffix(trimmed, "/inbox"):
+	case exactAny(name, "inbox", "收件箱"):
 		return store.RoleInbox
-	case containsAny(trimmed, "已发送", "sent", "sent items", "sent messages", "sent mail"):
+	case exactAny(name, "sent", "sent items", "sent messages", "sent mail", "sent folder", "已发送", "已发送邮件", "发件箱", "发件箱邮件"):
 		return store.RoleSent
-	case containsAny(trimmed, "草稿", "draft"):
+	case exactAny(name, "draft", "drafts", "draft items", "草稿", "草稿箱"):
 		return store.RoleDrafts
-	case containsAny(trimmed, "已删除", "垃圾箱", "trash", "deleted", "deleted items", "bin"):
+	case exactAny(name, "trash", "deleted", "deleted items", "bin", "已删除", "已删除邮件", "垃圾箱"):
 		return store.RoleTrash
-	case containsAny(trimmed, "垃圾邮件", "spam", "junk"):
+	case exactAny(name, "spam", "junk", "junk e-mail", "junk email", "垃圾邮件", "垃圾邮件箱"):
 		return store.RoleSpam
-	case containsAny(trimmed, "归档", "archive"):
+	case exactAny(name, "archive", "archives", "归档", "存档"):
 		return store.RoleArchive
 	}
 	return store.RoleCustom
+}
+
+func hasMailboxAttr(info *imap.MailboxInfo, target string) bool {
+	if info == nil {
+		return false
+	}
+	for _, attr := range info.Attributes {
+		if strings.EqualFold(attr, target) {
+			return true
+		}
+	}
+	return false
+}
+
+func exactAny(s string, values ...string) bool {
+	for _, value := range values {
+		if strings.EqualFold(s, value) {
+			return true
+		}
+	}
+	return false
 }
 
 func containsAny(s string, substrs ...string) bool {

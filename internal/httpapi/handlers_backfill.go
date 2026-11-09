@@ -19,7 +19,7 @@ type backfillRequest struct {
 
 // handleBackfill 手动触发历史回填：一次请求拉取一批更早的邮件。
 //   - 指定 folderId：只回填该文件夹；
-//   - scope=inbox（默认）：回填所有账号的收件箱，每次最多 3 个文件夹。
+//   - scope=inbox（默认）或 sent：回填对应系统文件夹，每次最多 3 个文件夹。
 func (s *Server) handleBackfill(w http.ResponseWriter, r *http.Request) {
 	if s.mail == nil {
 		writeError(w, r, http.StatusInternalServerError, codeInternal, "邮件引擎未就绪")
@@ -60,7 +60,11 @@ func (s *Server) handleBackfill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 聚合收件箱：按“未回填完优先、最久未更新优先”挑选最多 3 个收件箱。
+	// 聚合系统文件夹：按“未回填完优先、最久未更新优先”挑选最多 3 个目录。
+	role := store.RoleInbox
+	if strings.EqualFold(strings.TrimSpace(req.Scope), "sent") {
+		role = store.RoleSent
+	}
 	folders, err := s.st.ListFolders(ctx, strings.TrimSpace(req.AccountID))
 	if err != nil {
 		s.internalError(w, r, "查询文件夹失败", err)
@@ -68,7 +72,7 @@ func (s *Server) handleBackfill(w http.ResponseWriter, r *http.Request) {
 	}
 	candidates := make([]*store.Folder, 0, len(folders))
 	for _, f := range folders {
-		if f == nil || !f.Enabled || f.Role != store.RoleInbox || f.BackfillUID < 0 {
+		if f == nil || !f.Enabled || f.Role != role || f.BackfillUID < 0 {
 			continue
 		}
 		candidates = append(candidates, f)
@@ -103,7 +107,18 @@ func (s *Server) handleBackfill(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadGateway, codeUpstreamError, "拉取更早邮件失败: "+firstErr.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"inserted": inserted, "folders": used, "done": false})
+	done := true
+	for _, f := range folders {
+		if f == nil || !f.Enabled || f.Role != role {
+			continue
+		}
+		fresh, err := s.st.GetFolder(ctx, f.ID)
+		if err != nil || fresh.BackfillUID >= 0 {
+			done = false
+			break
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"inserted": inserted, "folders": used, "done": done})
 }
 
 // sortFoldersForBackfill 让“从未回填”的文件夹优先，其余按上次同步时间升序。

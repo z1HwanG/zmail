@@ -337,6 +337,12 @@ func (m *Manager) openIMAP(ctx context.Context, acc *store.Account, timeout time
 		_ = client.Logout()
 		return nil, fmt.Errorf("mail: IMAP 登录失败: %w", err)
 	}
+	if needsIMAPID(acc) {
+		if err := sendIMAPID(client); err != nil {
+			_ = client.Logout()
+			return nil, err
+		}
+	}
 
 	caps, capErr := client.Capability()
 	if capErr != nil {
@@ -346,6 +352,40 @@ func (m *Manager) openIMAP(ctx context.Context, acc *store.Account, timeout time
 	ic := &imapConn{client: client, caps: caps, raw: conn, done: make(chan struct{})}
 	ic.watchContext(ctx)
 	return ic, nil
+}
+
+// needsIMAPID 判断网易邮箱账号是否要求登录后发送客户端标识。
+func needsIMAPID(acc *store.Account) bool {
+	if acc == nil {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(acc.Provider), Provider163) {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSuffix(strings.TrimSpace(acc.IMAPHost), ".")) {
+	case "imap.163.com", "imap.126.com", "imap.yeah.net":
+		return true
+	default:
+		return false
+	}
+}
+
+// sendIMAPID 按网易邮箱要求在登录后声明客户端信息。
+func sendIMAPID(client *imapclient.Client) error {
+	cmd := &imap.Command{
+		Name: "ID",
+		Arguments: []interface{}{[]interface{}{
+			"name", "zMail", "version", "1.0", "vendor", "zMail",
+		}},
+	}
+	status, err := client.Execute(cmd, nil)
+	if err != nil {
+		return fmt.Errorf("mail: 发送 IMAP ID 客户端标识失败: %w", err)
+	}
+	if err := status.Err(); err != nil {
+		return fmt.Errorf("mail: 发送 IMAP ID 客户端标识失败: %w", err)
+	}
+	return nil
 }
 
 // isAuthError 判断错误是否为认证失败（需要标记 auth_failed 并停止重试）。
@@ -358,7 +398,7 @@ func isAuthError(err error) bool {
 		"authenticationfailed", "authentication failed", "authentication failure",
 		"invalid credentials", "invalid username", "invalid password",
 		"username or password", "login failed", "auth failed", "authorization failed",
-		"account is disabled", "no such user", "bad credentials",
+		"account is disabled", "no such user", "bad credentials", "unsafe login",
 	} {
 		if strings.Contains(msg, k) {
 			return true

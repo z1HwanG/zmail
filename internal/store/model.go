@@ -197,7 +197,7 @@ type SyncLog struct {
 type ListFilter struct {
 	AccountID   string
 	FolderID    string
-	Scope       string // inbox = 所有账号的收件箱聚合
+	Scope       string // inbox/sent = 所有账号的相应系统文件夹聚合
 	Before      time.Time
 	Cursor      string
 	Limit       int

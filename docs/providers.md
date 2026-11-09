@@ -27,9 +27,16 @@ IDLE 支持情况和常见错误。zMail 的账号表单与 `POST /api/accounts`
 |---|---|---|---|---|---|
 | Gmail | `imap.gmail.com:993` SSL | `smtp.gmail.com:465` SSL（或 587 STARTTLS） | 应用专用密码（需开两步验证） | 支持 | 跳过 `[Gmail]/All Mail`，否则 INBOX 重复 |
 | Outlook / Microsoft 365 | `outlook.office365.com:993` SSL | `smtp.office365.com:587` STARTTLS | 应用密码；Microsoft 已停用基本认证，需 OAuth2/XOAUTH2 | 支持 | 连接数限制较严，避免频繁重连 |
-| QQ 邮箱 | `imap.qq.com:993` SSL | `smtp.qq.com:465` SSL | 授权码（需先开启 IMAP/SMTP 服务） | 支持 | 文件夹名为中文，已发送为「已发送」 |
-| 163 邮箱 | `imap.163.com:993` SSL | `smtp.163.com:465` SSL | 授权码（客户端授权密码） | 部分支持 | 登录后必须发送 IMAP `ID` 命令，否则报 Unsafe Login |
+| QQ 邮箱 | `imap.qq.com:993` SSL | `smtp.qq.com:465` SSL | 授权码（需先开启 IMAP/SMTP 服务） | 支持 | 优先按 SPECIAL-USE 识别系统文件夹；中文目录名支持精确匹配 |
+| 163 邮箱 | `imap.163.com:993` SSL | `smtp.163.com:465` SSL | 授权码（客户端授权密码） | 部分支持 | zMail 登录后自动发送 IMAP `ID`；重复系统目录按规范路径选择 |
 | 自建 Dovecot | `mail.example.com:993` SSL | `mail.example.com:587` STARTTLS | 邮箱密码或应用密码 | 支持 | 内网地址需 `ALLOW_PRIVATE_IMAP=true` |
+
+### 系统文件夹识别与重复目录
+
+- zMail 优先按服务器返回的 IMAP SPECIAL-USE 属性识别收件箱、已发送、草稿、垃圾箱、垃圾邮件和归档；缺少属性时才按精确的常见名称兜底，不会把名称中偶然包含 `sent` 或 `draft` 的普通目录自动归为系统目录。
+- 同一邮箱若多个目录声明相同系统角色，优先使用带 SPECIAL-USE 属性的规范目录；其他目录仍保留为普通目录，保留其邮件，不会自动删除远端内容。重新发现时会更新本地角色标记，不会删除远端目录或邮件。
+- 普通文件夹的相同 Message-ID 副本会合并；已发送、草稿、垃圾箱等系统文件夹保留各自副本。因此 Gmail 跳过 All Mail 的行为仍然适用。
+- 全局「已发送」视图汇总所有账号已识别的 Sent 文件夹。网易系邮箱（163、126、yeah.net）登录后自动发送 IMAP `ID` 客户端标识。
 
 端口说明：
 
@@ -164,13 +171,13 @@ SMTP: smtp.163.com  465  SSL/TLS（25 端口也可但常被运营商封）
 Unsafe Login. Please contact kefu@188.com for help
 ```
 
-zMail 的 IMAP 客户端需要在 `LOGIN` 成功后立即发送：
+zMail 会在网易系账号 `LOGIN` 成功后立即自动发送：
 
 ```text
 A001 ID ("name" "zMail" "version" "1.0" "vendor" "zMail")
 ```
 
-若未实现，163 账号会一直认证失败，但 Gmail/QQ 不受影响。
+网易系邮箱账号（包括 163、126、yeah.net）会由客户端自动声明身份，Gmail/QQ 不受影响。
 
 ### 5.4 IDLE 与限流
 

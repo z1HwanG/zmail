@@ -2,8 +2,8 @@
 
 > 状态：首版功能已实现并进入维护阶段；本文保留架构、数据模型、构建与运维设计，接口签名以代码和 CONTRACT.md 为准。
 > 文档版本：v1.1
-> 最近更新：2026-10-24
-> 当前发布：0.1.1
+> 最近更新：2026-11-09
+> 当前发布：0.1.2
 > 项目定位：个人聚合邮箱 Web 端
 > 技术栈：Go + SQLite + IMAP IDLE + SSE
 > 部署形态：单二进制、单进程、反代外置
@@ -558,7 +558,9 @@ if server.UIDVALIDITY != local.uid_validity {
 #### 去重规则
 
 - 主键：`UNIQUE(account_id, folder_id, remote_uid)`
-- 跨文件夹去重：`account_id + message_id` 查询已存在则跳过或合并
+- 普通文件夹按 `account_id + message_id` 合并重复副本；`Sent`、`Drafts`、`Trash`、`Spam` 等系统角色保留各自副本，避免发件箱或草稿箱邮件被其他文件夹副本去重。
+- 手动历史回填支持按目录或聚合 `scope=inbox/sent` 执行；聚合请求每次最多回填 3 个匹配目录，完成状态以所选账号范围内全部匹配目录为准。
+- 系统角色优先使用 IMAP SPECIAL-USE 属性；多个目录声明同一角色时优先选服务器标记的规范目录，其余作为普通文件夹同步。
 - Gmail 必须跳过 `[Gmail]/All Mail`，否则 INBOX 邮件重复
 
 #### 错误分类
@@ -572,6 +574,8 @@ if server.UIDVALIDITY != local.uid_validity {
 | DB 写入失败 | 事务回滚，游标不推进，稍后重试 |
 
 ### 7.6 实时推送（SSE Hub）
+
+「已发送」聚合列表使用 `scope=sent`，按账号聚合 `role=sent` 文件夹；历史回填支持 `scope=inbox/sent`。
 
 事件协议：
 
@@ -1200,7 +1204,7 @@ go run ./cmd/zmail
 |---|---|---|
 | QQ、163 不支持 IDLE | 收信延迟 10 到 15 秒 | 能力检测 + 短轮询兜底 |
 | Gmail 应用密码政策变化 | 无法登录 | 预留 Gmail OAuth 适配器 |
-| 163 IMAP 要求 ID 命令 | 登录被拒 | 实现 IMAP ID 扩展 |
+| 163 IMAP 要求 ID 命令 | 登录被拒 | 登录后发送 IMAP ID 扩展（已实现） |
 | 邮件 HTML XSS | 安全风险 | bluemonday 白名单消毒 + CSP + 禁止远程图片 |
 | SQLite 写锁 | 请求失败 | 单写者 + WAL + busy_timeout |
 | 附件占满磁盘 | 服务不可用 | 去重、压缩、保留策略、磁盘告警 |

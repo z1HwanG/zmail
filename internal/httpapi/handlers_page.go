@@ -266,9 +266,9 @@ func (s *Server) handleMailPage(w http.ResponseWriter, r *http.Request) {
 	filter := store.ListFilter{AccountID: accountID, FolderID: folderID, Limit: 50}
 	if folderID == "" {
 		filter.Scope = "inbox"
-	}
-	if scope != "" && folderID == "" {
-		filter.Scope = scope
+		if scope == "sent" {
+			filter.Scope = "sent"
+		}
 	}
 	messages, _, err := s.st.ListMessages(ctx, filter)
 	if err != nil {

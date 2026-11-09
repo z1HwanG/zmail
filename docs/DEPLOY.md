@@ -296,16 +296,16 @@ curl -fL -o docker-compose.yml \
   https://raw.githubusercontent.com/z1HwanG/zmail/main/deploy/docker-compose.yml
 ```
 
-下载 0.1.1 发布二进制（按架构选择）：
+下载 0.1.2 发布二进制（按架构选择）：
 
 ```bash
 # x86_64
 curl -fL -o zmail-linux-amd64 \
-  https://github.com/z1HwanG/zmail/releases/download/0.1.1/zmail-linux-amd64
+  https://github.com/z1HwanG/zmail/releases/download/0.1.2/zmail-linux-amd64
 
 # ARM64 服务器改用：
 # curl -fL -o zmail-linux-amd64 \
-#   https://github.com/z1HwanG/zmail/releases/download/0.1.1/zmail-linux-arm64
+#   https://github.com/z1HwanG/zmail/releases/download/0.1.2/zmail-linux-arm64
 
 chmod 0755 zmail-linux-amd64
 ```

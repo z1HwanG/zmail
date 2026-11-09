@@ -192,8 +192,14 @@ func (s *Store) InsertMessages(ctx context.Context, bundles []*MessageBundle) (i
 			m.ID = NewID()
 		}
 
-		// 跨文件夹去重：同一账号下相同 Message-ID 只保留一封。
-		if m.MessageID != "" {
+		// 跨文件夹去重：普通文件夹合并副本，但 Sent/Drafts/Trash/Spam 等用户明确区分的
+		// 系统文件夹保留各自的副本，否则“发件箱”可能被收件箱中同 Message-ID 的邮件吃掉。
+		var folderRole string
+		if err := tx.QueryRowContext(ctx, "SELECT role FROM folders WHERE id = ?", m.FolderID).Scan(&folderRole); err != nil {
+			return 0, fmt.Errorf("store: 查询邮件文件夹角色失败: %w", err)
+		}
+		preserveSystemCopy := folderRole != RoleInbox && folderRole != RoleCustom
+		if !preserveSystemCopy && m.MessageID != "" {
 			var one int
 			err := tx.QueryRowContext(ctx,
 				"SELECT 1 FROM messages WHERE account_id = ? AND message_id = ? LIMIT 1",
@@ -434,9 +440,13 @@ func (s *Store) ListMessages(ctx context.Context, f ListFilter) ([]*MessageSumma
 		where = append(where, "m.folder_id = ?")
 		args = append(args, f.FolderID)
 	}
-	if f.Scope == "inbox" {
+	switch f.Scope {
+	case "inbox":
 		where = append(where, "fo.role = ?")
 		args = append(args, RoleInbox)
+	case "sent":
+		where = append(where, "fo.role = ?")
+		args = append(args, RoleSent)
 	}
 	if f.UnreadOnly {
 		where = append(where, "m.is_read = 0")

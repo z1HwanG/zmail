@@ -8,10 +8,14 @@
 <div class="layout">
   <aside class="sidebar" id="sidebar" aria-label="邮箱目录">
     <div id="sidebarContent">
-      <a class="folder-item{{if and (eq .FolderID "") (ne .Scope "sent")}} active{{end}}" href="/mail" data-folder-id="" data-account-id="">
+      <a class="folder-item{{if and (not .FolderID) (ne .Scope "sent")}} active{{end}}" href="/mail" data-folder-id="" data-account-id="">
         <span class="folder-icon" aria-hidden="true">{{folderIcon "all"}}</span>
         <span class="folder-name">全部收件箱</span>
         {{if gt .Stats.Unread 0}}<span class="badge">{{.Stats.Unread}}</span>{{end}}
+      </a>
+      <a class="folder-item{{if and (eq .FolderID "") (eq .Scope "sent")}} active{{end}}" href="/mail?scope=sent" data-folder-id="" data-account-id="" data-scope="sent">
+        <span class="folder-icon" aria-hidden="true">{{folderIcon "sent"}}</span>
+        <span class="folder-name">已发送</span>
       </a>
       {{range .Sidebar}}
       <div class="account-group" data-account-id="{{.Account.ID}}">
