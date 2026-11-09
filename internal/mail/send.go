@@ -3,8 +3,11 @@ package mail
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/mail"
 	"net/textproto"
 	"strings"
@@ -48,8 +51,12 @@ func (m *Manager) send(ctx context.Context, req SendRequest, enqueueRetry bool) 
 	if acc.Status == store.AccountDisabled {
 		return nil, fmt.Errorf("%w: 账号 %s", errAccountDisabled, req.AccountID)
 	}
-	if err := m.validateIMAPHost(ctx, acc.SMTPHost); err != nil {
+	smtpIPs, err := m.resolveMailHost(ctx, acc.SMTPHost)
+	if err != nil {
 		return nil, err
+	}
+	if strings.TrimSpace(req.MessageID) == "" {
+		req.MessageID = store.NewID() + "@zmail.local"
 	}
 
 	msg, raw, messageID, err := buildOutgoingMessage(acc, req)
@@ -57,12 +64,24 @@ func (m *Manager) send(ctx context.Context, req SendRequest, enqueueRetry bool) 
 		return nil, err
 	}
 
-	if err := m.deliverSMTP(ctx, acc, msg); err != nil {
+	if err := m.deliverSMTP(ctx, acc, msg, smtpIPs); err != nil {
 		m.log.Warn("SMTP 发信失败", "account", acc.ID, "error", err)
-		if enqueueRetry {
-			m.enqueueSendRetry(ctx, acc.ID, req, err)
+		if msg.IsDelivered() {
+			// DATA 最终确认已成功但后续 SMTP 收尾失败：不要重发，按已投递继续本地归档。
+			m.log.Warn("SMTP 已确认接收邮件，但会话收尾失败；不重试", "account", acc.ID, "message_id", messageID)
+		} else {
+			if isAmbiguousSMTPError(err) {
+				if enqueueRetry {
+					// 无法确认远端是否接收的失败不自动重发，避免重复邮件；需要用户确认后再重试。
+					m.enqueueSendReview(ctx, acc.ID, req, messageID, err)
+				}
+				return nil, fmt.Errorf("%w（Message-ID %s），已转为人工核查，不会自动重试", errSendUncertain, messageID)
+			}
+			if enqueueRetry {
+				m.enqueueSendRetry(ctx, acc.ID, req, messageID, err)
+			}
+			return nil, fmt.Errorf("mail: 发送邮件失败: %w", err)
 		}
-		return nil, fmt.Errorf("mail: 发送邮件失败: %w", err)
 	}
 
 	// 发送成功：APPEND 到 Sent（若存在）并落本地记录。
@@ -120,7 +139,11 @@ func buildOutgoingMessage(acc *store.Account, req SendRequest) (*gomail.Msg, []b
 	}
 	msg.Subject(req.Subject)
 	msg.SetDate()
-	msg.SetMessageID()
+	messageID := strings.TrimSpace(req.MessageID)
+	if messageID == "" {
+		messageID = store.NewID() + "@zmail.local"
+	}
+	msg.SetMessageIDWithValue(messageID)
 
 	text := req.TextBody
 	if strings.TrimSpace(text) == "" && req.HTMLBody != "" {
@@ -172,12 +195,12 @@ func buildOutgoingMessage(acc *store.Account, req SendRequest) (*gomail.Msg, []b
 	if _, err := msg.WriteTo(&buf); err != nil {
 		return nil, nil, "", fmt.Errorf("mail: 序列化邮件失败: %w", err)
 	}
-	messageID := strings.Trim(msg.GetMessageID(), "<> ")
+	messageID = strings.Trim(msg.GetMessageID(), "<> ")
 	return msg, buf.Bytes(), messageID, nil
 }
 
 // newSMTPClient 按账号配置创建 SMTP 客户端（465 隐式 SSL / 其它端口 STARTTLS）。
-func newSMTPClient(acc *store.Account, pass string, timeout time.Duration) (*gomail.Client, error) {
+func newSMTPClient(acc *store.Account, pass string, timeout time.Duration, ips []net.IP) (*gomail.Client, error) {
 	port := acc.SMTPPort
 	if port <= 0 {
 		port = 465
@@ -185,10 +208,27 @@ func newSMTPClient(acc *store.Account, pass string, timeout time.Duration) (*gom
 	opts := []gomail.Option{
 		gomail.WithPort(port),
 		gomail.WithTimeout(timeout),
-		gomail.WithSMTPAuth(gomail.SMTPAuthPlain),
+		// Custom implicit-TLS dialing is performed before go-mail sees the connection; NoEnc
+		// allows PLAIN only after our dialer has completed TLS, or STARTTLS is mandatory.
+		gomail.WithSMTPAuth(gomail.SMTPAuthPlainNoEnc),
 		gomail.WithUsername(acc.Username),
 		gomail.WithPassword(pass),
 		gomail.WithTLSConfig(tlsConfigFor(acc.SMTPHost)),
+		gomail.WithDialContextFunc(func(ctx context.Context, network, _ string) (net.Conn, error) {
+			if network != "tcp" {
+				return nil, fmt.Errorf("mail: SMTP 不支持网络类型 %q", network)
+			}
+			conn, err := dialPinned(ctx, port, ips, timeout)
+			if err != nil || !acc.SMTPSecure {
+				return conn, err
+			}
+			tlsConn := tls.Client(conn, tlsConfigFor(acc.SMTPHost))
+			if err := tlsConn.HandshakeContext(ctx); err != nil {
+				_ = conn.Close()
+				return nil, fmt.Errorf("mail: SMTP TLS 握手失败: %w", err)
+			}
+			return tlsConn, nil
+		}),
 	}
 	if acc.SMTPSecure {
 		opts = append(opts, gomail.WithSSL())
@@ -203,20 +243,24 @@ func newSMTPClient(acc *store.Account, pass string, timeout time.Duration) (*gom
 }
 
 // deliverSMTP 用账号的 SMTP 配置投递邮件。
-func (m *Manager) deliverSMTP(ctx context.Context, acc *store.Account, msg *gomail.Msg) error {
+func (m *Manager) deliverSMTP(ctx context.Context, acc *store.Account, msg *gomail.Msg, ips []net.IP) error {
+	if len(ips) == 0 {
+		return fmt.Errorf("mail: SMTP 没有已校验的目标地址")
+	}
 	pass, err := m.decryptPassword(acc)
 	if err != nil {
 		return err
 	}
-	client, err := newSMTPClient(acc, pass, smtpTimeout)
+	client, err := newSMTPClient(acc, pass, smtpTimeout, ips)
 	if err != nil {
 		return err
 	}
 	return client.DialAndSendWithContext(ctx, msg)
 }
 
-// enqueueSendRetry 写入失败重试任务（store.FinishJob 负责最多 3 次与退避）。
-func (m *Manager) enqueueSendRetry(ctx context.Context, accountID string, req SendRequest, cause error) {
+// enqueueSendRetry 写入明确未投递的 SMTP 失败重试任务（最多 3 次）。
+func (m *Manager) enqueueSendRetry(ctx context.Context, accountID string, req SendRequest, messageID string, cause error) {
+	req.MessageID = messageID
 	payload, err := json.Marshal(req)
 	if err != nil {
 		m.log.Warn("序列化发信重试任务失败", "account", accountID, "error", err)
@@ -234,6 +278,39 @@ func (m *Manager) enqueueSendRetry(ctx context.Context, accountID string, req Se
 		return
 	}
 	m.kickJobs()
+}
+
+// isAmbiguousSMTPError 把 DATA 内容发送或最终确认阶段的错误视为结果不确定。
+// SMTP 不提供通用幂等键，不能安全自动重试此类错误。
+func isAmbiguousSMTPError(err error) bool {
+	var sendErr *gomail.SendError
+	if !errors.As(err, &sendErr) {
+		return false // 连接、TLS、认证失败发生在 DATA 投递前，可安全重试。
+	}
+	switch sendErr.Reason {
+	case gomail.ErrSMTPDataClose, gomail.ErrWriteContent, gomail.ErrSMTPReset, gomail.ErrConnCheck, gomail.ErrAmbiguous:
+		return true
+	default:
+		return false
+	}
+}
+
+// enqueueSendReview 将结果不确定的发信置为人工核查任务，不自动重新投递。
+func (m *Manager) enqueueSendReview(ctx context.Context, accountID string, req SendRequest, messageID string, cause error) {
+	req.MessageID = messageID
+	payload, err := json.Marshal(req)
+	if err != nil {
+		m.log.Warn("序列化待核查发信失败", "account", accountID, "error", err)
+		return
+	}
+	job := &store.Job{Kind: JobSendReview, AccountID: accountID, Payload: string(payload), LastError: cause.Error()}
+	if err := m.st.EnqueueJob(ctx, job); err != nil {
+		m.log.Warn("保存待核查发信失败", "account", accountID, "error", err)
+		return
+	}
+	if err := m.st.HoldJobForReview(ctx, job.ID, cause.Error()); err != nil {
+		m.log.Warn("标记待核查发信失败", "account", accountID, "error", err)
+	}
 }
 
 // SendQueued 执行一个 retry_send 任务。

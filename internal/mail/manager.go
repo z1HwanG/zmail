@@ -37,6 +37,7 @@ const (
 // 任务类型。
 const (
 	JobRetrySend    = "retry_send"
+	JobSendReview   = "send_review"
 	JobRetrySync    = "retry_sync"
 	JobBackfill     = "backfill"
 	JobDeleteRemote = "delete_remote"
@@ -55,10 +56,12 @@ var (
 	errPrivateHost     = errors.New("mail: 拒绝连接内网地址")
 	errAccountDisabled = errors.New("mail: 账号已禁用")
 	errManagerStopped  = errors.New("mail: 邮件引擎已停止")
+	errSendUncertain   = errors.New("mail: SMTP 投递结果不确定")
 )
 
 // SendRequest 是一封待发送邮件的参数。
 type SendRequest struct {
+	MessageID   string `json:"messageId,omitempty"`
 	AccountID   string
 	To          []string
 	Cc          []string
@@ -588,6 +591,9 @@ func (m *Manager) markAuthFailed(ctx context.Context, acc *store.Account, cause 
 
 // jobsLoop 轮询持久化任务（发信重试、同步重试、回填）。
 func (m *Manager) jobsLoop(ctx context.Context) {
+	if err := m.st.RecoverRunningJobs(ctx, 0); err != nil {
+		m.log.Warn("恢复中断任务失败", "error", err)
+	}
 	ticker := time.NewTicker(jobPollInterval)
 	defer ticker.Stop()
 	for {
@@ -617,6 +623,12 @@ func (m *Manager) processJobs(ctx context.Context) {
 			continue
 		}
 		jobErr := m.runJob(ctx, job)
+		if errors.Is(jobErr, errSendUncertain) {
+			if err := m.st.HoldJobForReview(ctx, job.ID, jobErr.Error()); err != nil {
+				m.log.Warn("标记发信结果待核查失败", "job", job.ID, "error", err)
+			}
+			continue
+		}
 		if err := m.st.FinishJob(ctx, job.ID, jobErr); err != nil {
 			m.log.Warn("结束任务失败", "job", job.ID, "error", err)
 		}
@@ -627,6 +639,9 @@ func (m *Manager) runJob(ctx context.Context, job *store.Job) error {
 	switch job.Kind {
 	case JobRetrySend:
 		return m.SendQueued(ctx, job)
+	case JobSendReview:
+		// 保留原始发送请求供人工核查，但绝不自动调用 SMTP 重发。
+		return nil
 	case JobRetrySync:
 		accountID := job.AccountID
 		if accountID == "" {
@@ -707,14 +722,15 @@ func (m *Manager) TestConnection(ctx context.Context, acc *store.Account) error 
 	conn.close()
 
 	// 顺带验证 SMTP（TLS 握手 + AUTH），失败时给出明确错误。
-	if err := m.validateIMAPHost(ctx, acc.SMTPHost); err != nil {
+	smtpIPs, err := m.resolveMailHost(ctx, acc.SMTPHost)
+	if err != nil {
 		return err
 	}
 	pass, err := m.decryptPassword(acc)
 	if err != nil {
 		return err
 	}
-	smtpClient, err := newSMTPClient(acc, pass, testConnTimeout)
+	smtpClient, err := newSMTPClient(acc, pass, testConnTimeout, smtpIPs)
 	if err != nil {
 		return err
 	}

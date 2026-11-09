@@ -4,19 +4,24 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 )
 
-const jobColumns = `id, kind, COALESCE(account_id, ''), payload, run_at, attempts, status, last_error, created_at`
+const jobColumns = `id, kind, COALESCE(account_id, ''), payload, run_at, attempts, status, last_error, created_at, claimed_at`
 
 func scanJob(sc rowScanner) (*Job, error) {
 	var (
 		j       Job
 		runAt   string
+		claimed sql.NullString
 		created string
 	)
-	if err := sc.Scan(&j.ID, &j.Kind, &j.AccountID, &j.Payload, &runAt, &j.Attempts, &j.Status, &j.LastError, &created); err != nil {
+	if err := sc.Scan(&j.ID, &j.Kind, &j.AccountID, &j.Payload, &runAt, &j.Attempts, &j.Status, &j.LastError, &created, &claimed); err != nil {
 		return nil, err
+	}
+	if claimed.Valid {
+		j.ClaimedAt = parseTime(claimed.String)
 	}
 	j.RunAt = parseTime(runAt)
 	j.CreatedAt = parseTime(created)
@@ -44,12 +49,32 @@ func (s *Store) EnqueueJob(ctx context.Context, j *Job) error {
 	if j.CreatedAt.IsZero() {
 		j.CreatedAt = now
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO jobs (id, kind, account_id, payload, run_at, attempts, status, last_error, created_at)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	_, err := s.db.ExecContext(ctx, `INSERT INTO jobs (id, kind, account_id, payload, run_at, attempts, status, last_error, created_at, claimed_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
 		j.ID, j.Kind, nullIfEmpty(j.AccountID), j.Payload, formatTime(j.RunAt), j.Attempts,
 		j.Status, j.LastError, formatTime(j.CreatedAt))
 	if err != nil {
 		return fmt.Errorf("store: 写入任务失败: %w", err)
+	}
+	return nil
+}
+
+// RecoverRunningJobs 恢复遗留 running 任务。lease 为零时恢复全部；正值仅恢复超时租约。
+// retry_send 可能在远端已接收而客户端崩溃时重复投递，因此标为结果不确定并转人工审核。
+func (s *Store) RecoverRunningJobs(ctx context.Context, lease time.Duration) error {
+	if lease < 0 {
+		lease = 0
+	}
+	now := time.Now().UTC()
+	cutoff := formatTime(now.Add(-lease))
+	_, err := s.db.ExecContext(ctx, `UPDATE jobs SET
+	status = CASE WHEN kind IN ('retry_send', 'send_review') THEN 'review' ELSE 'pending' END,
+	last_error = CASE WHEN kind IN ('retry_send', 'send_review') THEN '进程在发送任务执行期间中断，投递结果不确定；请核查邮箱后手动处理' ELSE last_error END,
+	claimed_at = NULL,
+	run_at = CASE WHEN kind IN ('retry_send', 'send_review') THEN run_at ELSE ? END
+	WHERE status = 'running' AND (claimed_at IS NULL OR claimed_at <= ?)`, formatTime(now), cutoff)
+	if err != nil {
+		return fmt.Errorf("store: 恢复过期运行任务失败: %w", err)
 	}
 	return nil
 }
@@ -83,12 +108,31 @@ func (s *Store) DueJobs(ctx context.Context, limit int) ([]*Job, error) {
 	return out, nil
 }
 
+// HoldJobForReview 把执行结果不确定的任务留给人工核查，不再自动重试。
+func (s *Store) HoldJobForReview(ctx context.Context, id, message string) error {
+	if strings.TrimSpace(id) == "" {
+		return fmt.Errorf("%w: 任务 ID 不能为空", ErrInvalid)
+	}
+	res, err := s.db.ExecContext(ctx, "UPDATE jobs SET status = ?, last_error = ?, claimed_at = NULL WHERE id = ?", JobReview, message, id)
+	if err != nil {
+		return fmt.Errorf("store: 标记待核查任务失败: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: 标记待核查任务失败: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: 任务 %s", ErrNotFound, id)
+	}
+	return nil
+}
+
 // ClaimJob 把待执行任务置为 running。
 func (s *Store) ClaimJob(ctx context.Context, id string) error {
 	if id == "" {
 		return fmt.Errorf("%w: 任务 ID 不能为空", ErrInvalid)
 	}
-	res, err := s.db.ExecContext(ctx, "UPDATE jobs SET status = ? WHERE id = ? AND status = ?", JobRunning, id, JobPending)
+	res, err := s.db.ExecContext(ctx, "UPDATE jobs SET status = ?, claimed_at = ? WHERE id = ? AND status = ?", JobRunning, formatTime(time.Now().UTC()), id, JobPending)
 	if err != nil {
 		return fmt.Errorf("store: 领取任务失败: %w", err)
 	}
@@ -118,7 +162,7 @@ func (s *Store) FinishJob(ctx context.Context, id string, jobErr error) error {
 	var err error
 	if jobErr == nil {
 		res, err = s.db.ExecContext(ctx,
-			"UPDATE jobs SET status = ?, last_error = '' WHERE id = ?", JobDone, id)
+			"UPDATE jobs SET status = ?, last_error = '', claimed_at = NULL WHERE id = ?", JobDone, id)
 	} else {
 		now := time.Now().UTC()
 		retry1 := formatTime(now.Add(time.Minute))
@@ -127,6 +171,7 @@ func (s *Store) FinishJob(ctx context.Context, id string, jobErr error) error {
 	attempts = attempts + 1,
 	status = CASE WHEN attempts + 1 >= 3 THEN 'failed' ELSE 'pending' END,
 	last_error = ?,
+	claimed_at = NULL,
 	run_at = CASE
 		WHEN attempts + 1 >= 3 THEN run_at
 		WHEN attempts + 1 = 1 THEN ?

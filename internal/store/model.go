@@ -33,6 +33,7 @@ const (
 	JobRunning = "running"
 	JobDone    = "done"
 	JobFailed  = "failed"
+	JobReview  = "review"
 )
 
 // Addr 表示一个邮件地址。
@@ -180,6 +181,7 @@ type Job struct {
 	Status    string
 	LastError string
 	CreatedAt time.Time
+	ClaimedAt time.Time
 }
 
 // SyncLog 是同步日志。

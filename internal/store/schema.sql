@@ -125,7 +125,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   attempts   INTEGER NOT NULL DEFAULT 0,
   status     TEXT NOT NULL DEFAULT 'pending',
   last_error TEXT NOT NULL DEFAULT '',
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  claimed_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_due
   ON jobs(status, run_at);

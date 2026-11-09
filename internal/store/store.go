@@ -91,7 +91,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, schemaSQL); err != nil {
 		return fmt.Errorf("store: 初始化 schema 失败: %w", err)
 	}
-	// v1.1：folders.backfill_uid 记录历史回填游标（老库需要 ALTER TABLE 补齐）。
+	// v1.1：folders.backfill_uid 记录历史回填游标；任务 claim lease 列为新版本新增。
 	has, err := s.hasColumn(ctx, "folders", "backfill_uid")
 	if err != nil {
 		return err
@@ -100,6 +100,15 @@ func (s *Store) Migrate(ctx context.Context) error {
 		if _, err := s.db.ExecContext(ctx,
 			"ALTER TABLE folders ADD COLUMN backfill_uid INTEGER NOT NULL DEFAULT 0"); err != nil {
 			return fmt.Errorf("store: 添加 folders.backfill_uid 列失败: %w", err)
+		}
+	}
+	has, err = s.hasColumn(ctx, "jobs", "claimed_at")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := s.db.ExecContext(ctx, "ALTER TABLE jobs ADD COLUMN claimed_at TEXT"); err != nil {
+			return fmt.Errorf("store: 添加 jobs.claimed_at 列失败: %w", err)
 		}
 	}
 	return nil

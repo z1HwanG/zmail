@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -144,46 +145,111 @@ func (m *Manager) decryptPassword(acc *store.Account) (string, error) {
 	return pass, nil
 }
 
-// validateIMAPHost 做 SSRF 防护：未开启 AllowPrivateIMAP 时拒绝内网/环回/链路本地地址。
-func (m *Manager) validateIMAPHost(ctx context.Context, host string) error {
+// resolveMailHost 校验目标全部地址，并返回供本次连接固定使用的 DNS 快照。
+func (m *Manager) resolveMailHost(ctx context.Context, host string) ([]net.IP, error) {
 	host = strings.TrimSpace(strings.Trim(host, "[]"))
 	if host == "" {
-		return fmt.Errorf("%w: IMAP 主机为空", errInvalidAccount)
-	}
-	if m.cfg != nil && m.cfg.AllowPrivateIMAP {
-		return nil
+		return nil, fmt.Errorf("%w: IMAP 主机为空", errInvalidAccount)
 	}
 	if ip := net.ParseIP(host); ip != nil {
-		return checkPublicIP(host, ip)
+		if m.cfg == nil || !m.cfg.AllowPrivateIMAP {
+			if err := checkPublicIP(host, ip); err != nil {
+				return nil, err
+			}
+		}
+		return []net.IP{ip}, nil
 	}
 	lookupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	addrs, err := net.DefaultResolver.LookupIPAddr(lookupCtx, host)
 	if err != nil {
-		return fmt.Errorf("mail: 解析 IMAP 主机 %q 失败: %w", host, err)
+		return nil, fmt.Errorf("mail: 解析邮件主机 %q 失败: %w", host, err)
 	}
 	if len(addrs) == 0 {
-		return fmt.Errorf("mail: IMAP 主机 %q 没有可用的 A/AAAA 记录", host)
+		return nil, fmt.Errorf("mail: 邮件主机 %q 没有可用的 A/AAAA 记录", host)
 	}
+	ips := make([]net.IP, 0, len(addrs))
 	for _, a := range addrs {
-		if err := checkPublicIP(host, a.IP); err != nil {
-			return err
+		if m.cfg == nil || !m.cfg.AllowPrivateIMAP {
+			if err := checkPublicIP(host, a.IP); err != nil {
+				return nil, err
+			}
+		}
+		if a.IP.To4() != nil {
+			ips = append(ips, append(net.IP(nil), a.IP.To4()...))
+		} else {
+			ips = append(ips, append(net.IP(nil), a.IP.To16()...))
 		}
 	}
-	return nil
+	return ips, nil
+}
+
+// validateIMAPHost 保留用于兼容配置校验；拨号路径必须直接调用 resolveMailHost 并固定结果。
+func (m *Manager) validateIMAPHost(ctx context.Context, host string) error {
+	_, err := m.resolveMailHost(ctx, host)
+	return err
+}
+
+// dialPinned 在不重新解析 DNS 的情况下，按已校验地址拨号。TLS 仍使用原主机名校验证书。
+func dialPinned(ctx context.Context, port int, ips []net.IP, timeout time.Duration) (net.Conn, error) {
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("mail: 邮件主机没有已校验的 IP 地址")
+	}
+	dialer := &net.Dialer{Timeout: timeout}
+	var lastErr error
+	for _, ip := range ips {
+		conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(ip.String(), strconv.Itoa(port)))
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
 }
 
 // checkPublicIP 拒绝内网、环回、链路本地、组播与未指定地址。
 func checkPublicIP(host string, ip net.IP) error {
 	if ip == nil {
-		return fmt.Errorf("mail: IMAP 主机 %q 的地址无法识别", host)
+		return fmt.Errorf("mail: 邮件主机 %q 的地址无法识别", host)
 	}
-	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
-		ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
-		return fmt.Errorf("%w: 邮箱服务器主机 %q 指向内网地址 %s（如需自建内网邮箱请设置 ALLOW_PRIVATE_IMAP=true）",
-			errPrivateHost, host, ip.String())
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return fmt.Errorf("mail: 邮件主机 %q 的地址无法识别", host)
+	}
+	addr = addr.Unmap()
+	// net.IP.IsGlobalUnicast 也会将部分特殊用途地址视为单播；仅放行 IANA 公网单播范围。
+	if !mailPublicUnicast(addr) {
+		return fmt.Errorf("%w: 邮箱服务器主机 %q 指向非公网地址 %s（如需自建内网邮箱请设置 ALLOW_PRIVATE_IMAP=true）",
+			errPrivateHost, host, addr)
 	}
 	return nil
+}
+
+var mailNonPublicPrefixes = func() []netip.Prefix {
+	raw := []string{
+		"0.0.0.0/8", "100.64.0.0/10", "192.0.0.0/24", "192.0.2.0/24",
+		"192.88.99.0/24", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24",
+		"224.0.0.0/4", "240.0.0.0/4", "2001:db8::/32", "2001::/23",
+		"2002::/16", "64:ff9b::/96",
+	}
+	prefixes := make([]netip.Prefix, 0, len(raw))
+	for _, cidr := range raw {
+		prefixes = append(prefixes, netip.MustParsePrefix(cidr))
+	}
+	return prefixes
+}()
+
+func mailPublicUnicast(addr netip.Addr) bool {
+	if !addr.IsValid() || !addr.IsGlobalUnicast() || addr.IsPrivate() || addr.IsLoopback() ||
+		addr.IsLinkLocalUnicast() || addr.IsMulticast() || addr.IsUnspecified() {
+		return false
+	}
+	for _, prefix := range mailNonPublicPrefixes {
+		if prefix.Contains(addr) {
+			return false
+		}
+	}
+	return true
 }
 
 // tlsConfigFor 生成用于 IMAP/SMTP 的 TLS 配置。
@@ -208,7 +274,8 @@ func (m *Manager) openIMAP(ctx context.Context, acc *store.Account, timeout time
 	if timeout <= 0 {
 		timeout = imapDialTimeout
 	}
-	if err := m.validateIMAPHost(ctx, host); err != nil {
+	ips, err := m.resolveMailHost(ctx, host)
+	if err != nil {
 		return nil, err
 	}
 
@@ -217,8 +284,7 @@ func (m *Manager) openIMAP(ctx context.Context, acc *store.Account, timeout time
 		port = 993
 	}
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
-	dialer := &net.Dialer{Timeout: timeout}
-	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	conn, err := dialPinned(ctx, port, ips, timeout)
 	if err != nil {
 		return nil, fmt.Errorf("mail: 连接 IMAP 服务器 %s 失败: %w", addr, err)
 	}

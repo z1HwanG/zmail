@@ -17,7 +17,7 @@ zMail 把 Gmail、Outlook、QQ、163 和自建 IMAP 邮箱聚合到一个三栏 
 |---|---|
 | [docs/BUILD.md](docs/BUILD.md) | 架构、数据模型、模块设计、API 与完整构建步骤 |
 | [docs/CONTRACT.md](docs/CONTRACT.md) | 内部包接口与前端 DOM 契约 |
-| [docs/DEPLOY.md](docs/DEPLOY.md) | 二进制/systemd、Docker、反向代理与运维 |
+| [docs/DEPLOY.md](docs/DEPLOY.md) | 1Panel Go + HTTPS Git、systemd、Docker、反向代理与运维 |
 | [docs/reverse-proxy.md](docs/reverse-proxy.md) | Nginx / Caddy / Traefik 反代与 SSE 配置 |
 | [docs/providers.md](docs/providers.md) | Gmail、Outlook、QQ、163、自建邮箱接入 |
 | [CHANGELOG.md](CHANGELOG.md) | 版本变更记录 |
@@ -34,11 +34,11 @@ zMail 把 Gmail、Outlook、QQ、163 和自建 IMAP 邮箱聚合到一个三栏 
 - **连续浏览邮件**：阅读器内「上一封 / 下一封」＋位置指示（如 3 / 14），移动端有「返回列表」，不必反复回列表找下一封
 - **升级即时生效**：静态资源带构建指纹（`?v=`）并长缓存，服务端升级后浏览器与 Service Worker 会自动拉取新资源，不会继续用旧 app.js
 - **验证码识别**：中文/英文模板提取，右下角大号 Toast + 一键复制 + 浏览器通知
-- **发信/回复/转发**：SMTP（SSL/STARTTLS）发送 + APPEND 到 Sent，失败自动入队重试；Composer 支持多附件
+- **发信/回复/转发**：SMTP（SSL/STARTTLS）发送 + APPEND 到 Sent；明确的 SMTP 拒绝自动重试，投递结果不确定时暂停并保留人工核查任务；Composer 支持多附件
 - **已读/星标/删除回写**：本地即时生效，删除异步回写 IMAP（STORE \Deleted + EXPUNGE），失败写同步日志并重试
 - **安全**：凭据 AES-256-GCM 加密、HMAC 签名会话、CSRF Origin 校验、邮件 HTML 服务端白名单消毒、CSP、SSRF 防护（含远程图片代理）
 - **轻量前端**：html/template + 原生 JS（htmx 本地 vendored），无构建链、无 CDN、深色模式、键盘快捷键、命令面板、PWA
-- **单二进制部署**：CGO_ENABLED=0 静态编译，systemd 托管，TLS 交给外部反代
+- **多种部署方式**：支持 1Panel Go 运行环境、CGO_ENABLED=0 单二进制/systemd 与 Docker Compose，TLS 交由反向代理
 
 ## 快速开始
 
@@ -98,23 +98,27 @@ go vet ./...; go run ./cmd/zmail
 
 ## 质量检查
 
+自动化验证包含地址校验、会话/CSRF、HTML 消毒、凭据加密、任务恢复和 SQLite 并发 smoke test。发信结果不确定时，任务进入 `review` 状态并停止自动重投；SMTP 无法保证通用的恰好一次语义，处理前应核查远端邮箱。
+
 ```bash
 go vet ./...
 ```
 
-仓库不包含自动化测试代码与冒烟脚本；发布前请按 [docs/BUILD.md](docs/BUILD.md) 第 13 章的验收清单手工验证关键流程。
+仓库包含基础单元测试与 SQLite 并发基准。发布前仍请按 [docs/BUILD.md](docs/BUILD.md) 第 13 章的验收清单手工验证 IMAP/SMTP 与反向代理等真实环境流程。
 
 部署方式：
 
-- **通用部署（推荐）**：见 [docs/DEPLOY.md](docs/DEPLOY.md)——二进制 + systemd、Docker Compose、反向代理与 HTTPS、SSE 关缓冲、备份升级和排错清单
+- **1Panel 部署（推荐）**：见 [docs/DEPLOY.md](docs/DEPLOY.md)——服务器 HTTPS 克隆源码、Go 运行环境、持久化挂载、域名反代与 SSE 配置；另含 systemd 和 Docker Compose 方式
 - 通用 Linux 部署：见 [docs/BUILD.md](docs/BUILD.md) 第 11 章
 - 反代细节：[docs/reverse-proxy.md](docs/reverse-proxy.md)；服务商参数与授权码申请：[docs/providers.md](docs/providers.md)
 
+二进制部署时可用以下命令交叉编译 Linux amd64/arm64：
+
 ```bash
-make build-linux   # 交叉编译 dist/zmail-linux-amd64 与 -arm64，上传服务器即可
+make build-linux   # 生成 dist/zmail-linux-amd64 与 dist/zmail-linux-arm64
 ```
 
-Windows 未安装 GNU make 时使用 `make.cmd build-linux`（等价于 `.\make.ps1 build-linux`）。
+Windows 未安装 GNU make 时使用 `make.cmd build-linux`（等价于 `.\make.ps1 build-linux`）。1Panel Go 环境 + HTTPS Git 部署不需要本机交叉编译或上传二进制。
 
 ## 目录结构
 
