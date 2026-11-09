@@ -1,0 +1,51 @@
+name: Deploy to 1Panel
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-1panel
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          port: ${{ secrets.SERVER_PORT }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script_stop: true
+          command_timeout: 10m
+          script: |
+            set -euo pipefail
+            SRC=/opt/1panel/apps/zmail/src
+            BRANCH="${{ github.ref_name }}"
+            REPO="${{ github.repository }}"
+
+            cd "$SRC"
+            git fetch --prune "https://github.com/$REPO.git" "+refs/heads/$BRANCH:refs/remotes/github/$BRANCH"
+            git reset --hard "refs/remotes/github/$BRANCH"
+            echo "deployed commit: $(git log --oneline -1)"
+
+            docker restart zmail-runtime
+
+            for i in $(seq 1 90); do
+              if curl -fsS -o /dev/null "http://127.0.0.1:7080/"; then
+                echo "healthy after ${i}s"
+                exit 0
+              fi
+              sleep 1
+            done
+
+            echo "health check failed, last logs:"
+            docker logs --tail 60 zmail-runtime || true
+            exit 1
