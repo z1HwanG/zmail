@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -112,8 +113,11 @@ func run() error {
 	go maintenanceLoop(rootCtx, st, logger)
 
 	srv := &http.Server{
-		Addr:              cfg.ListenAddr,
-		Handler:           api.Handler(),
+		Addr:    cfg.ListenAddr,
+		Handler: api.Handler(),
+		// 绑定 rootCtx：关闭时 cancel() 能立即中断 SSE 长连接，
+		// 否则 Shutdown 会一直等到 15 秒超时。
+		BaseContext:       func(net.Listener) context.Context { return rootCtx },
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
 		WriteTimeout:      0, // SSE 需要长连接

@@ -8,15 +8,64 @@ on:
 permissions:
   contents: read
 
+# 部署串行化：不取消进行中的部署，避免 git reset 中途被 kill 留下半成品
 concurrency:
   group: deploy-1panel
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
-  deploy:
+  # 第一层容错：编译不过就根本不会进部署流程，线上完全不受影响
+  build:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - name: Deploy over SSH
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+
+      - name: Build linux/amd64 binary
+        run: |
+          set -euo pipefail
+          VERSION="$(git describe --tags --always 2>/dev/null || echo dev)"
+          echo "building version: $VERSION"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+            go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
+            -o zmail-linux-amd64 ./cmd/zmail
+          ls -lh zmail-linux-amd64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zmail-linux-amd64
+          path: zmail-linux-amd64
+          if-no-files-found: error
+          retention-days: 3
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # 第二层容错：整包传输完成才进入下一步，不存在"传到第一个文件就重启"
+      - uses: actions/download-artifact@v4
+        with:
+          name: zmail-linux-amd64
+
+      - name: Upload binary to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST || 'z1hwang.cn' }}
+          username: ${{ secrets.SERVER_USER || 'root' }}
+          port: ${{ secrets.SERVER_PORT || '22' }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: zmail-linux-amd64
+          target: /opt/1panel/apps/zmail
+
+      - name: Switch release and restart
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SERVER_HOST || 'z1hwang.cn' }}
@@ -24,28 +73,90 @@ jobs:
           port: ${{ secrets.SERVER_PORT || '22' }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script_stop: true
-          command_timeout: 10m
+          command_timeout: 5m
           script: |
             set -euo pipefail
+
             SRC=/opt/1panel/apps/zmail/src
+            APP=/opt/1panel/apps/zmail
+            ENVFILE=/opt/1panel/runtime/go/zmail/.env
+            CONTAINER=zmail-runtime
             BRANCH="${{ github.ref_name }}"
             REPO="${{ github.repository }}"
 
             cd "$SRC"
+
+            PREV_COMMIT="$(git rev-parse HEAD 2>/dev/null || echo '')"
+            echo "previous commit: ${PREV_COMMIT:-<none>}"
+
+            # 保留回滚点
+            if [ -x ./zmail ]; then
+              cp -f ./zmail ./zmail.prev
+              echo "backed up current binary"
+            fi
+
+            # 原子切换源码
             git fetch --prune "https://github.com/$REPO.git" "+refs/heads/$BRANCH:refs/remotes/github/$BRANCH"
             git reset --hard "refs/remotes/github/$BRANCH"
             echo "deployed commit: $(git log --oneline -1)"
 
-            docker restart zmail-runtime
+            # 安装二进制：先落到 .new，校验后再原子替换
+            test -s "$APP/zmail-linux-amd64" || { echo "binary not uploaded"; exit 1; }
+            chmod 0755 "$APP/zmail-linux-amd64"
+            mv -f "$APP/zmail-linux-amd64" "$SRC/zmail.new"
+            chmod 0755 "$SRC/zmail.new"
+            if ! "$SRC/zmail.new" -version; then
+              echo "binary self-check failed"
+              rm -f "$SRC/zmail.new"
+              exit 1
+            fi
+            mv -f "$SRC/zmail.new" "$SRC/zmail"
+            echo "binary installed: $(ls -lh "$SRC/zmail" | awk '{print $5}')"
 
-            for i in $(seq 1 90); do
-              if curl -fsS -o /dev/null "http://127.0.0.1:7080/"; then
+            # 启动命令切到二进制。注意：.env 是单文件 bind mount，必须保持 inode，
+            # 不能用 sed -i（会换 inode 导致容器内看不到改动）
+            if ! grep -q '^EXEC_SCRIPT="exec \./zmail"' "$ENVFILE"; then
+              sed 's|^EXEC_SCRIPT=.*|EXEC_SCRIPT="exec ./zmail"|' "$ENVFILE" > "$ENVFILE.new"
+              cat "$ENVFILE.new" > "$ENVFILE"
+              rm -f "$ENVFILE.new"
+              echo "EXEC_SCRIPT -> ./zmail"
+            fi
+
+            docker restart "$CONTAINER"
+
+            for i in $(seq 1 40); do
+              if curl -fsS -o /dev/null --max-time 2 "http://127.0.0.1:7080/healthz" 2>/dev/null \
+                 || curl -fsS -o /dev/null --max-time 2 "http://127.0.0.1:7080/" 2>/dev/null; then
                 echo "healthy after ${i}s"
                 exit 0
               fi
               sleep 1
             done
 
-            echo "health check failed, last logs:"
-            docker logs --tail 60 zmail-runtime || true
+            # 第三层容错：健康检查失败，二进制与源码一起回滚
+            echo "health check failed, rolling back"
+            docker logs --tail 80 "$CONTAINER" 2>&1 || true
+
+            if [ -x "$SRC/zmail.prev" ]; then
+              mv -f "$SRC/zmail.prev" "$SRC/zmail"
+              echo "binary rolled back"
+            else
+              sed 's|^EXEC_SCRIPT=.*|EXEC_SCRIPT="go run ./cmd/zmail"|' "$ENVFILE" > "$ENVFILE.new"
+              cat "$ENVFILE.new" > "$ENVFILE"
+              rm -f "$ENVFILE.new"
+              echo "no previous binary, EXEC_SCRIPT -> go run ./cmd/zmail"
+            fi
+
+            if [ -n "$PREV_COMMIT" ]; then
+              git reset --hard "$PREV_COMMIT"
+              echo "code rolled back to $PREV_COMMIT"
+            fi
+
+            docker restart "$CONTAINER" || true
+            sleep 5
+            if curl -fsS -o /dev/null --max-time 2 "http://127.0.0.1:7080/" 2>/dev/null; then
+              echo "service restored after rollback"
+            else
+              echo "::warning::service still unhealthy after rollback"
+            fi
             exit 1

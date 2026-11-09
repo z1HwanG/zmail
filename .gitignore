@@ -1,6 +1,9 @@
 # 构建产物
 /zmail
 /zmail.exe
+/zmail.prev
+/zmail.new
+/zmail-linux-amd64
 /dist/
 
 # 运行数据
